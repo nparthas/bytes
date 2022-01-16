@@ -5,7 +5,12 @@ use std::mem;
 use std::num::{ParseIntError, TryFromIntError};
 use std::str;
 
-pub type SolverInt = i32;
+// TODO:: tests and descriptive error reporting
+// TODO:: shift ops >>/<<
+// TODO:: equals implementation
+// TODO:: floating point support
+
+pub type SolverInt = isize;
 
 macro_rules! ok_some {
     ($x:expr) => {
@@ -21,9 +26,9 @@ macro_rules! unsfe {
 
 // TODO:: identifiers -- add to TokenType and keep value as str,
 
+// TODO:: implement Display eventually
 #[derive(Debug)]
 pub enum SolverError {
-    ParseIntError(ParseIntError),
     ParseNumError(ParseNumError),
     ParseUnsignedPowError(TryFromIntError),
     InvalidExpressionError(String),
@@ -34,12 +39,6 @@ pub enum SolverError {
 #[derive(Debug, Clone)]
 pub struct ParseNumError {
     why: String,
-}
-
-impl From<ParseIntError> for SolverError {
-    fn from(error: std::num::ParseIntError) -> Self {
-        SolverError::ParseIntError(error)
-    }
 }
 
 impl From<TryFromIntError> for SolverError {
@@ -65,14 +64,14 @@ pub struct Token {
 }
 
 impl Token {
-    fn from_op(op: OpToken) -> Token {
+    fn from_op(op: OpToken) -> Self {
         Token {
             token_type: TokenType::Op,
             element: TokenElement { op },
         }
     }
 
-    fn from_num(num: SolverInt) -> Token {
+    fn from_num(num: SolverInt) -> Self {
         Token {
             token_type: TokenType::Num,
             element: TokenElement { num },
@@ -98,7 +97,6 @@ impl fmt::Debug for Token {
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum OpToken {
-    // Invalid,
     _Equal, // unused
     Plus,
     Minus, // this can be binary or unary
@@ -192,10 +190,14 @@ impl<'a> TokenFeed<'a> {
                 '/' => return ok_some!(Token::from_op(OpToken::Div)),
                 '^' => return ok_some!(Token::from_op(OpToken::Exp)),
                 '%' => return ok_some!(Token::from_op(OpToken::Mod)),
-                '0'..='9' | 'a'..='f' => {
-                    let num = TokenFeed::extract_number(c, &mut self.itr)?;
-                    return ok_some!(Token::from_num(num));
-                }
+                '0'..='9' | 'a'..='f' => match TokenFeed::extract_number(c, &mut self.itr) {
+                    Ok(num) => return ok_some!(Token::from_num(num)),
+                    Err(_) => {
+                        return Err(SolverError::ParseNumError(ParseNumError {
+                            why: format!("Failed to parse num starting with '{}'", c),
+                        }))
+                    }
+                },
                 c if c.is_whitespace() => continue,
                 _ => {
                     return Err(SolverError::ParseNumError(ParseNumError {
@@ -220,9 +222,9 @@ impl<'a> TokenFeed<'a> {
     fn extract_number(
         c: char,
         itr: &mut iter::Peekable<str::Chars>,
-    ) -> Result<SolverInt, SolverError> {
+    ) -> Result<SolverInt, ParseIntError> {
         // probably the best way to do this since rust isn't ASCII
-        let mut s = String::with_capacity(20);
+        let mut s = String::with_capacity(18);
         if c != '0' {
             s.push(c);
         }
@@ -238,7 +240,7 @@ impl<'a> TokenFeed<'a> {
                     radix = 16;
                     itr.next();
                 }
-                '1'..='9' | 'a'..='f' | 'A'..='F' => s.push(itr.next().unwrap()),
+                '0'..='9' | 'a'..='f' | 'A'..='F' => s.push(itr.next().unwrap()),
                 _ => {
                     return Ok(SolverInt::from_str_radix(s.as_str(), radix)?);
                 }
@@ -331,4 +333,111 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed) -> Result<SolverInt, Sol
 pub fn solve(expr: &str) -> Result<SolverInt, SolverError> {
     let mut tokenfeed = TokenFeed::new(expr.to_string());
     do_expression(0, &mut tokenfeed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const OPS: [OpToken; 9] = [
+        OpToken::_Equal,
+        OpToken::Plus,
+        OpToken::Minus,
+        OpToken::Mul,
+        OpToken::Div,
+        OpToken::Mod,
+        OpToken::Exp,
+        OpToken::Open,
+        OpToken::Close,
+    ];
+
+    #[derive(Debug)]
+    struct TestError {
+        reason: String,
+    }
+
+    impl From<SolverError> for TestError {
+        fn from(e: SolverError) -> Self {
+            TestError {
+                reason: format!("{:?}", e),
+            }
+        }
+    }
+
+    fn call_eq(expr: &str, expected: SolverInt) -> Result<(), TestError> {
+        let actual = solve(expr);
+        match actual {
+            Ok(actual) => {
+                if actual == expected {
+                    Ok(())
+                } else {
+                    Err(TestError {
+                        reason: format!("Calling solver on [{}] A:{} E:{}", expr, actual, expected),
+                    })
+                }
+            }
+            Err(e) => Err(TestError {
+                reason: format!("Calling solver on [{}] returned [{:?}]", expr, e),
+            }),
+        }
+    }
+
+    #[test]
+    fn test_basic_ops() -> Result<(), TestError> {
+        for op in OPS.iter() {
+            match op {
+                OpToken::_Equal => assert!("not implemented" != ""),
+                OpToken::Plus => call_eq("5 + 5", 10)?,
+                OpToken::Minus => call_eq("-5 -2", -7)?,
+                OpToken::Mul => call_eq("12*15", 180)?,
+                OpToken::Div => call_eq("12/3", 4)?,
+                OpToken::Mod => call_eq("8%5", 3)?,
+                OpToken::Exp => call_eq("9^3", 729)?,
+                OpToken::Open => call_eq("(5+1)*2", 12)?,
+                OpToken::Close => call_eq("(3-7)/-2", 2)?,
+            }
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_exp_right_assoc() -> Result<(), TestError> {
+        call_eq("2^3^2", 512)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_0_padding() -> Result<(), TestError> {
+        call_eq("00000100 * 110011", 11001100)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_hex_and_bin() -> Result<(), TestError> {
+        call_eq("0x55 - 0b1101101", -24)?;
+        call_eq("0x055 - 0b0000001101101", -24)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_bedmas() -> Result<(), TestError> {
+        let inputs = [
+            ("(5+2)*2", 14),
+            ("(3-1)*10", 20),
+            ("(2*3)^2", 36),
+            ("(1-2)*5", -5),
+            ("3*(8/2) + 1", 13),
+            ("-5 * (-3+1)/2", 5),
+            ("((2+1)*4)^2", 144),
+            ("36/(1+2)", 12),
+            ("5*2 +1", 11),
+        ];
+
+        for input in inputs.iter() {
+            call_eq(input.0, input.1)?;
+        }
+
+        Ok(())
+    }
 }

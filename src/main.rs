@@ -39,15 +39,12 @@ impl Args {
 
 #[actix_web::main]
 async fn main() {
-    // std::env::set_var("RUST_LOG", "actix_web=debug,rustyline=info");
-    // env_logger::init();
-
     let log_config = ConfigBuilder::new()
         .add_filter_ignore_str("rustyline")
         .set_time_to_local(true)
         .build();
     WriteLogger::init(
-        LevelFilter::Debug,
+        LevelFilter::Trace,
         log_config,
         File::create("server.log").unwrap(),
     )

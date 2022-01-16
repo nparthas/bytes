@@ -51,6 +51,10 @@ pub fn main_loop() -> Result<(), ReplError> {
         match readline {
             Ok(line) => {
                 let line = line.trim();
+                if line == "" {
+                    continue;
+                }
+
                 if line.starts_with(META_PREFIX) {
                     match tokenize_meta(&line) {
                         MetaToken::Exit => break,
