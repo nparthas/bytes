@@ -3,12 +3,20 @@ name = "byte-server"
 version = "0.1.0"
 authors = ["Neil <neilp1998@gmail.com>"]
 edition = "2018"
+default-run = "byte-cli"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[[bin]]
+name = "byte-cli"
+path = "src/bin/byte-cli.rs"
+
+[[bin]]
+name = "byte-server"
+path = "src/bin/byte-server.rs"
+
 [dependencies]
 actix-web = "3.3.3"
-#env_logger = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 simplelog = "^0.11.1"

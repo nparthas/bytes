@@ -292,13 +292,10 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed) -> Result<SolverInt, Sol
             OpToken::Open => {
                 let res = do_expression(OpToken::PRECEDENCE_NO_PREC, feed)?;
                 if let Some(next) = feed.next()? {
-                    if !(next.token_type == TokenType::Op
-                        && unsfe!(next.element.op) == OpToken::Close)
-                    {
+                    if !(next.token_type == TokenType::Op && unsfe!(next.element.op) == OpToken::Close) {
                         return Err(SolverError::UnbalancedBracketError(format!(
                             "Expected a closing bracket near col [{}]",
-                            feed.cur_col()
-                                .expect("We should be able to peek a token here")
+                            feed.cur_col().expect("We should be able to peek a token here")
                         )));
                     }
                 } else {
@@ -469,6 +466,9 @@ mod tests {
             ("((2+1)*4)^2", 144),
             ("36/(1+2)", 12),
             ("5*2 +1", 11),
+            ("5*5 - 1 ^10 * 55000 / 100 ", -525),
+            ("6 + (16 - 4)/(2^2 + 2) - 2", 6),
+            ("(4 + 8)/(2 + 1) - (3 - 1) + 2", 4),
         ];
 
         for input in inputs.iter() {
