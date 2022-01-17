@@ -2,10 +2,9 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::iter;
 use std::mem;
-use std::num::{ParseIntError, TryFromIntError};
+use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: implement Display eventually
 // TODO:: fix closing brackets terminating expression
 // TODO:: equals implementation
 // TODO:: brackets next to each other
@@ -27,18 +26,74 @@ macro_rules! unsfe {
     };
 }
 
+macro_rules! extract_on_radix {
+    ($($pat: pat)|+, $s:expr, $itr:expr) => {
+        while let Some(c) = $itr.peek() {
+            match c.1 {
+                $($pat)|+ => $s.push($itr.next().unwrap().1),
+                _ => {
+                    break;
+                }
+            }
+        }
+    };
+}
+
 #[derive(Debug)]
 pub enum SolverError {
-    ParseNumError(String),
     ParseUnsignedPowError(TryFromIntError),
-    InvalidExpressionError(String),
-    UnbalancedBracketError(String),
+    InvalidExpressionError(ErrorLocation),
+    UnbalancedBracketError(ErrorLocation),
     NotImplementedError,
+}
+
+#[derive(Debug)]
+pub struct ErrorLocation {
+    error: &'static str,
+    loc: usize, // store as 0-indexed
+    hint: Option<char>,
+}
+
+impl ErrorLocation {
+    fn new(error: &'static str, loc: usize, hint: Option<char>) -> Self {
+        ErrorLocation { error, loc, hint }
+    }
+
+    pub fn get_loc(&self) -> usize {
+        self.loc
+    }
+}
+
+impl fmt::Display for ErrorLocation {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Some(c) = self.hint {
+            if self.loc != usize::MAX {
+                write!(f, "{} '{}' near col [{}]", self.error, c, self.loc + 1)
+            } else {
+                write!(f, "{} '{}' near the end", self.error, c)
+            }
+        } else if self.loc != usize::MAX {
+            write!(f, "{} near col [{}]", self.error, self.loc + 1)
+        } else {
+            write!(f, "{} near the end", self.error,)
+        }
+    }
 }
 
 impl From<TryFromIntError> for SolverError {
     fn from(error: std::num::TryFromIntError) -> Self {
         SolverError::ParseUnsignedPowError(error)
+    }
+}
+
+impl fmt::Display for SolverError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self {
+            SolverError::ParseUnsignedPowError(_) => write!(f, "Negative powers are not supported"),
+            SolverError::InvalidExpressionError(e) => e.fmt(f),
+            SolverError::UnbalancedBracketError(e) => e.fmt(f),
+            SolverError::NotImplementedError => write!(f, "Not implemented"),
+        }
     }
 }
 
@@ -87,6 +142,15 @@ impl fmt::Debug for Token {
                 },
             )
             .finish()
+    }
+}
+
+impl fmt::Display for Token {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self.token_type {
+            TokenType::Num => write!(f, "{}", unsfe!(self.element.num)),
+            TokenType::Op => write!(f, "{}", unsfe!(self.element.op)),
+        }
     }
 }
 
@@ -151,6 +215,22 @@ impl OpToken {
     const PRECEDENCE_NEG_TOK: i32 = 4;
 }
 
+impl fmt::Display for OpToken {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match &self {
+            OpToken::_Equal => write!(f, "+"),
+            OpToken::Exp => write!(f, "^"),
+            OpToken::Plus => write!(f, "+"),
+            OpToken::Minus => write!(f, "-"),
+            OpToken::Mul => write!(f, "*"),
+            OpToken::Div => write!(f, "/"),
+            OpToken::Mod => write!(f, "%"),
+            OpToken::Open => write!(f, "("),
+            OpToken::Close => write!(f, ")"),
+        }
+    }
+}
+
 struct TokenFeed<'a> {
     _src: String,
     _peek: Option<Result<Option<Token>, SolverError>>,
@@ -185,22 +265,15 @@ impl<'a> TokenFeed<'a> {
                 '/' => return ok_some!(Token::from_op(OpToken::Div)),
                 '^' => return ok_some!(Token::from_op(OpToken::Exp)),
                 '%' => return ok_some!(Token::from_op(OpToken::Mod)),
-                '0'..='9' | 'a'..='f' => match TokenFeed::extract_number(c.1, &mut self.itr) {
-                    Ok(num) => return ok_some!(Token::from_num(num)),
-                    Err(_) => {
-                        return Err(SolverError::ParseNumError(format!(
-                            "Invalid char trying to parse num '{}' near col [{}]",
-                            c.1,
-                            c.0 + 1
-                        )))
-                    }
-                },
+                '0'..='9' => {
+                    return ok_some!(Token::from_num(TokenFeed::extract_number(c.1, &mut self.itr)))
+                }
                 c if c.is_whitespace() => continue,
                 _ => {
-                    return Err(SolverError::ParseNumError(format!(
-                        "Invalid char in expression '{}' near at col [{}]",
-                        c.1,
-                        c.0 + 1
+                    return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
+                        "Invalid char in expression",
+                        c.0,
+                        Some(c.1),
                     )))
                 }
             }
@@ -226,15 +299,13 @@ impl<'a> TokenFeed<'a> {
         None
     }
 
-    fn extract_number(
-        c: char,
-        itr: &mut iter::Peekable<iter::Enumerate<str::Chars>>,
-    ) -> Result<SolverInt, ParseIntError> {
+    // first character must be valid
+    // push any other invalid errors to be caught by other parts of the program
+    fn extract_number(c: char, itr: &mut iter::Peekable<iter::Enumerate<str::Chars>>) -> SolverInt {
         // probably the best way to do this since rust isn't ASCII
         let mut s = String::with_capacity(18);
-        if c != '0' {
-            s.push(c);
-        }
+        s.push(c);
+
         // handle 0b and 0x prefixes
         let mut radix = 10;
         if let Some(c) = itr.peek() {
@@ -247,19 +318,21 @@ impl<'a> TokenFeed<'a> {
                     radix = 16;
                     itr.next();
                 }
-                '0'..='9' | 'a'..='f' | 'A'..='F' => s.push(itr.next().unwrap().1),
+                '0'..='9' => s.push(itr.next().unwrap().1),
                 _ => {
-                    return Ok(SolverInt::from_str_radix(s.as_str(), radix)?);
+                    return SolverInt::from_str_radix(s.as_str(), radix).unwrap();
                 }
             }
         }
-        while let Some(c) = itr.peek() {
-            match c.1 {
-                '0'..='9' | 'a'..='f' | 'A'..='F' => s.push(itr.next().unwrap().1),
-                _ => break,
-            }
+
+        match radix {
+            16 => extract_on_radix!('0'..='9' | 'a'..='f' | 'A'..='F', s, itr),
+            10 => extract_on_radix!('0'..='9', s, itr),
+            2 => extract_on_radix!('0'..='1', s, itr),
+            _ => panic!("Unsupported radix"),
         }
-        Ok(SolverInt::from_str_radix(s.as_str(), radix)?)
+
+        SolverInt::from_str_radix(s.as_str(), radix).unwrap()
     }
 }
 
@@ -279,9 +352,11 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed) -> Result<SolverInt, Sol
     let cur = match feed.next()? {
         Some(x) => x,
         None => {
-            return Err(SolverError::InvalidExpressionError(
-                "Expected a token at the start of an expression".to_string(),
-            ))
+            return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
+                "Expected a token",
+                usize::MAX,
+                None,
+            )));
         }
     };
 
@@ -293,27 +368,32 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed) -> Result<SolverInt, Sol
                 let res = do_expression(OpToken::PRECEDENCE_NO_PREC, feed)?;
                 if let Some(next) = feed.next()? {
                     if !(next.token_type == TokenType::Op && unsfe!(next.element.op) == OpToken::Close) {
-                        return Err(SolverError::UnbalancedBracketError(format!(
-                            "Expected a closing bracket near col [{}]",
+                        return Err(SolverError::UnbalancedBracketError(ErrorLocation::new(
+                            "Expected a closing bracket",
                             feed.cur_col().expect("We should be able to peek a token here")
+                                - next.to_string().len()
+                                - 1,
+                            Some(')'),
                         )));
                     }
                 } else {
-                    return Err(SolverError::UnbalancedBracketError(
-                        "Expected a closing bracket".to_string(),
-                    ));
+                    return Err(SolverError::UnbalancedBracketError(ErrorLocation::new(
+                        "Expected a closing bracket",
+                        usize::MAX,
+                        Some(')'),
+                    )));
                 }
 
                 res
             }
             _ => {
-                return Err(SolverError::InvalidExpressionError(format!(
-                    "Unexpected token near {}",
-                    if let Some(col) = feed.cur_col() {
-                        format!("col [{}]", col)
-                    } else {
-                        "the end".to_string()
-                    }
+                return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
+                    "Unexpected token",
+                    match feed.cur_col() {
+                        Some(i) => i - 1,
+                        None => usize::MAX,
+                    },
+                    None,
                 )));
             }
         },
@@ -336,9 +416,6 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed) -> Result<SolverInt, Sol
             _ => {
                 // I don't think it's possible to hit here, in case the condition is found
                 panic!("hit here... save the equation and write a test");
-                // return Err(SolverError::InvalidExpressionError(
-                //     "Invalid op token here".to_string(),
-                // ))
             }
         }
     }
@@ -444,13 +521,25 @@ mod tests {
     #[test]
     fn test_0_padding() -> Result<(), TestError> {
         call_eq("00000100 * 110011", 11001100)?;
+        call_eq("0 + 5", 5)?;
+        call_eq("0 * -1", 0)?;
         Ok(())
     }
 
     #[test]
     fn test_hex_and_bin() -> Result<(), TestError> {
-        call_eq("0x55 - 0b1101101", -24)?;
-        call_eq("0x055 - 0b0000001101101", -24)?;
+        let inputs = [
+            ("0x55 - 0b1101101", -24),
+            ("0x055 - 0b0000001101101", -24),
+            ("0x16 - 0x0A1", -139),
+            ("0B101 - 0b010", 3),
+            ("0X1E - 0xFF", -225),
+        ];
+
+        for input in inputs.iter() {
+            call_eq(input.0, input.1)?;
+        }
+
         Ok(())
     }
 
@@ -480,17 +569,17 @@ mod tests {
 
     #[test]
     fn test_parse_errors() -> Result<(), TestError> {
-        expect_error!("2 - 2asf", SolverError::ParseNumError);
+        expect_error!("2 - 2asf", SolverError::InvalidExpressionError);
         expect_error!("(3+1) + ) + 2", SolverError::InvalidExpressionError);
         expect_error!("((3+1)", SolverError::UnbalancedBracketError);
         expect_error!("(3+1 1*2", SolverError::UnbalancedBracketError);
-        expect_error!("(6+1", SolverError::UnbalancedBracketError);
-        expect_error!("6+1)", SolverError::InvalidExpressionError);
-        expect_error!("5 *2 - a$sdf$", SolverError::ParseNumError);
+        expect_error!("5 *2 - a$sdf$", SolverError::InvalidExpressionError);
         expect_error!("2^-1", SolverError::ParseUnsignedPowError);
         expect_error!("", SolverError::InvalidExpressionError);
-        expect_error!("3//2", SolverError::InvalidExpressionError);
+        expect_error!("3++2", SolverError::InvalidExpressionError);
+        expect_error!("(6+1", SolverError::UnbalancedBracketError);
         expect_error!("3 2", SolverError::InvalidExpressionError);
+        expect_error!("6+1)", SolverError::InvalidExpressionError);
         Ok(())
     }
 }

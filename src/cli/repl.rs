@@ -31,10 +31,7 @@ fn tokenize_meta(line: &str) -> MetaToken {
 }
 
 fn build_prompt() -> Editor<()> {
-    let config = Config::builder()
-        .completion_type(CompletionType::List)
-        .build();
-
+    let config = Config::builder().completion_type(CompletionType::List).build();
     Editor::with_config(config)
 }
 
@@ -50,6 +47,7 @@ pub fn main_loop() -> Result<(), ReplError> {
         let readline = repl.readline("# ");
         match readline {
             Ok(line) => {
+                let lpad = line.len() - line.trim_start().len();
                 let line = line.trim();
                 if line == "" {
                     continue;
@@ -69,11 +67,23 @@ pub fn main_loop() -> Result<(), ReplError> {
                     let s = std::time::Instant::now();
                     let expr = expression::solve(&line);
                     let d = s.elapsed();
-                    println!("duration is: {:?}", d);
 
                     match expr {
-                        Ok(res) => println!("{}", expression::format(res)),
-                        Err(e) => println!("{:?}", e),
+                        Ok(res) => println!("{}    [{:?}]", expression::format(res), d),
+                        Err(err) => match err {
+                            expression::SolverError::ParseUnsignedPowError(_)
+                            | expression::SolverError::NotImplementedError => println!("{}", err),
+                            expression::SolverError::InvalidExpressionError(e)
+                            | expression::SolverError::UnbalancedBracketError(e) => {
+                                if e.get_loc() != usize::MAX {
+                                    println!("{: <1$}^", "", e.get_loc() + 2);
+                                } else {
+                                    println!("{: <1$}^", "", line.len() + lpad + 2);
+                                }
+
+                                println!("{}", e);
+                            }
+                        },
                     }
                 }
             }
