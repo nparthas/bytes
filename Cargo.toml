@@ -10,10 +10,15 @@ default-run = "byte-cli"
 [[bin]]
 name = "byte-cli"
 path = "src/bin/byte-cli.rs"
+test = false
 
 [[bin]]
 name = "byte-server"
 path = "src/bin/byte-server.rs"
+test= false
+
+[lib]
+doctest = false
 
 [dependencies]
 actix-web = "3.3.3"

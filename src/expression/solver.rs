@@ -5,12 +5,12 @@ use std::mem;
 use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: fix closing brackets terminating expression
 // TODO:: equals implementation
 // TODO:: brackets next to each other
 // TODO:: shift ops >>/<<
 // TODO:: floating point support
 // TODO:: identifiers -- add to TokenType and keep value as str,
+// TODO:: sqrt/exp/log
 
 pub type SolverInt = isize;
 
@@ -425,7 +425,20 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed) -> Result<SolverInt, Sol
 
 pub fn solve(expr: &str) -> Result<SolverInt, SolverError> {
     let mut tokenfeed = TokenFeed::new(expr.to_string());
-    do_expression(0, &mut tokenfeed)
+    let res = do_expression(0, &mut tokenfeed);
+    if let Ok(num) = res {
+        if let Ok(None) = tokenfeed.next() {
+            Ok(num)
+        } else {
+            Err(SolverError::InvalidExpressionError(ErrorLocation::new(
+                "Unused tokens",
+                usize::MAX,
+                None,
+            )))
+        }
+    } else {
+        res
+    }
 }
 
 #[cfg(test)]
