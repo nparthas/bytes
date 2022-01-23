@@ -1,3 +1,4 @@
+use std::collections;
 use std::convert::TryFrom;
 use std::fmt;
 use std::iter;
@@ -5,14 +6,17 @@ use std::mem;
 use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: equals implementation
 // TODO:: brackets next to each other
 // TODO:: shift ops >>/<<
 // TODO:: floating point support
-// TODO:: identifiers -- add to TokenType and keep value as str,
 // TODO:: sqrt/exp/log
 
 pub type SolverInt = isize;
+
+pub const FEED_OFFSET_END: usize = usize::MAX;
+const FEED_OFFSET_BEHIND: usize = 1;
+const FEED_OFFSET_ON: usize = 2;
+const FEED_OFFSET_VAR_ON: usize = 3;
 
 macro_rules! ok_some {
     ($x:expr) => {
@@ -39,11 +43,15 @@ macro_rules! extract_on_radix {
     };
 }
 
+// we are greedy on error reporting, just return the first error
+// we see in the expression even if there are more errors or
+// "better" errors
 #[derive(Debug)]
 pub enum SolverError {
     ParseUnsignedPowError(TryFromIntError),
     InvalidExpressionError(ErrorLocation),
     UnbalancedBracketError(ErrorLocation),
+    UnsetVariableError(ErrorLocation),
     NotImplementedError,
 }
 
@@ -51,11 +59,11 @@ pub enum SolverError {
 pub struct ErrorLocation {
     error: &'static str,
     loc: usize, // store as 0-indexed
-    hint: Option<char>,
+    hint: Option<String>,
 }
 
 impl ErrorLocation {
-    fn new(error: &'static str, loc: usize, hint: Option<char>) -> Self {
+    fn new(error: &'static str, loc: usize, hint: Option<String>) -> Self {
         ErrorLocation { error, loc, hint }
     }
 
@@ -66,16 +74,16 @@ impl ErrorLocation {
 
 impl fmt::Display for ErrorLocation {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        if let Some(c) = self.hint {
+        if let Some(c) = &self.hint {
             if self.loc != usize::MAX {
                 write!(f, "{} '{}' near col [{}]", self.error, c, self.loc + 1)
             } else {
-                write!(f, "{} '{}' near the end", self.error, c)
+                write!(f, "{} '{}' near the end of the expression", self.error, c)
             }
         } else if self.loc != usize::MAX {
             write!(f, "{} near col [{}]", self.error, self.loc + 1)
         } else {
-            write!(f, "{} near the end", self.error,)
+            write!(f, "{} near the end of the expression", self.error,)
         }
     }
 }
@@ -92,71 +100,108 @@ impl fmt::Display for SolverError {
             SolverError::ParseUnsignedPowError(_) => write!(f, "Negative powers are not supported"),
             SolverError::InvalidExpressionError(e) => e.fmt(f),
             SolverError::UnbalancedBracketError(e) => e.fmt(f),
+            SolverError::UnsetVariableError(e) => e.fmt(f),
             SolverError::NotImplementedError => write!(f, "Not implemented"),
         }
     }
 }
 
-#[derive(Debug, PartialEq)]
-enum TokenType {
-    Op,
-    Num,
+#[derive(Debug)]
+pub struct Variables {
+    vars: collections::HashMap<Identifier, SolverInt>,
+    res_ident: Identifier,
 }
 
-union TokenElement {
-    op: OpToken,
-    num: SolverInt,
+impl Variables {
+    pub fn new() -> Self {
+        Variables::default()
+    }
+
+    pub fn update(&mut self, var: Identifier, value: SolverInt) {
+        self.vars.insert(var, value);
+    }
+
+    pub fn get(&self, var: &Identifier) -> Option<&SolverInt> {
+        self.vars.get(var)
+    }
+
+    pub fn result_identifier(&self) -> Identifier {
+        self.res_ident.clone()
+    }
 }
 
-pub struct Token {
-    token_type: TokenType,
-    element: TokenElement,
+impl Default for Variables {
+    fn default() -> Self {
+        Variables {
+            vars: collections::HashMap::new(),
+            res_ident: Identifier("_".to_string()),
+        }
+    }
+}
+
+impl fmt::Display for Variables {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if let Some(&v) = self.vars.get(&self.result_identifier()) {
+            writeln!(f, "{:>6} = {}", self.result_identifier(), v)?;
+        }
+
+        for (k, v) in &self.vars {
+            if *k == self.result_identifier() {
+                continue;
+            }
+
+            writeln!(f, "{:>6} = {}", k, v)?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Identifier(String);
+
+impl fmt::Display for Identifier {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug)]
+enum Token {
+    Op(OpToken),
+    Num(SolverInt),
+    Var(Identifier),
 }
 
 impl Token {
-    fn from_op(op: OpToken) -> Self {
-        Token {
-            token_type: TokenType::Op,
-            element: TokenElement { op },
+    fn as_op(&self) -> OpToken {
+        match self {
+            Token::Op(op) => *op,
+            _ => unreachable!(),
         }
     }
 
-    fn from_num(num: SolverInt) -> Self {
-        Token {
-            token_type: TokenType::Num,
-            element: TokenElement { num },
+    fn as_var(&self) -> Identifier {
+        match self {
+            Token::Var(ident) => ident.clone(),
+            _ => unreachable!(),
         }
-    }
-}
-
-impl fmt::Debug for Token {
-    fn fmt(&self, fmt: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt.debug_struct("Token")
-            .field("token_type", &self.token_type)
-            .field(
-                "element",
-                if self.token_type == TokenType::Num {
-                    unsfe!(&self.element.num)
-                } else {
-                    unsfe!(&self.element.op)
-                },
-            )
-            .finish()
     }
 }
 
 impl fmt::Display for Token {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self.token_type {
-            TokenType::Num => write!(f, "{}", unsfe!(self.element.num)),
-            TokenType::Op => write!(f, "{}", unsfe!(self.element.op)),
+        match self {
+            Token::Num(num) => write!(f, "{}", num),
+            Token::Op(op) => write!(f, "{}", op),
+            Token::Var(ident) => write!(f, "{}", ident),
         }
     }
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
 enum OpToken {
-    _Equal, // unused
+    Equal,
     Plus,
     Minus, // this can be binary or unary
     Mul,
@@ -170,23 +215,18 @@ enum OpToken {
 impl OpToken {
     fn precedence(&self) -> i32 {
         match &self {
-            OpToken::_Equal => 1,
-            OpToken::Plus | OpToken::Minus => 2,
-            OpToken::Mul | OpToken::Div | OpToken::Mod => 3,
-            OpToken::Exp => 5,
-            OpToken::Open | OpToken::Close => 6,
+            OpToken::Equal => 3,
+            OpToken::Plus | OpToken::Minus => 4,
+            OpToken::Mul | OpToken::Div | OpToken::Mod => 6,
+            OpToken::Exp => 7,
+            OpToken::Open | OpToken::Close => 8,
         }
     }
 
     fn is_binary(&self) -> bool {
         match &self {
-            OpToken::_Equal | OpToken::Open | OpToken::Close => false,
-            OpToken::Plus
-            | OpToken::Minus
-            | OpToken::Mul
-            | OpToken::Div
-            | OpToken::Mod
-            | OpToken::Exp => true,
+            OpToken::Open | OpToken::Close => false,
+            OpToken::Equal | OpToken::Plus | OpToken::Minus | OpToken::Mul | OpToken::Div | OpToken::Mod | OpToken::Exp => true,
         }
     }
 
@@ -200,25 +240,19 @@ impl OpToken {
 
     fn is_right_assoc(&self) -> bool {
         match &self {
-            OpToken::_Equal | OpToken::Exp => true,
-            OpToken::Plus
-            | OpToken::Minus
-            | OpToken::Mul
-            | OpToken::Div
-            | OpToken::Mod
-            | OpToken::Open
-            | OpToken::Close => false,
+            OpToken::Equal | OpToken::Exp => true,
+            OpToken::Plus | OpToken::Minus | OpToken::Mul | OpToken::Div | OpToken::Mod | OpToken::Open | OpToken::Close => false,
         }
     }
 
     const PRECEDENCE_NO_PREC: i32 = 0;
-    const PRECEDENCE_NEG_TOK: i32 = 4;
+    const PRECEDENCE_NEG_TOK: i32 = 5;
 }
 
 impl fmt::Display for OpToken {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self {
-            OpToken::_Equal => write!(f, "+"),
+            OpToken::Equal => write!(f, "+"),
             OpToken::Exp => write!(f, "^"),
             OpToken::Plus => write!(f, "+"),
             OpToken::Minus => write!(f, "-"),
@@ -240,7 +274,7 @@ struct TokenFeed<'a> {
 // our return type isn't what Iterator is so we don't implement
 // using transmute instead of manually holding the index since its simpler
 impl<'a> TokenFeed<'a> {
-    fn new(line: String) -> TokenFeed<'a> {
+    fn new(line: String) -> Self {
         let itr = unsfe!(mem::transmute(line.chars().enumerate().peekable()));
         TokenFeed {
             _src: line,
@@ -257,23 +291,25 @@ impl<'a> TokenFeed<'a> {
 
         while let Some(c) = self.itr.next() {
             match c.1 {
-                '(' => return ok_some!(Token::from_op(OpToken::Open)),
-                ')' => return ok_some!(Token::from_op(OpToken::Close)),
-                '+' => return ok_some!(Token::from_op(OpToken::Plus)),
-                '-' => return ok_some!(Token::from_op(OpToken::Minus)),
-                '*' => return ok_some!(Token::from_op(OpToken::Mul)),
-                '/' => return ok_some!(Token::from_op(OpToken::Div)),
-                '^' => return ok_some!(Token::from_op(OpToken::Exp)),
-                '%' => return ok_some!(Token::from_op(OpToken::Mod)),
-                '0'..='9' => {
-                    return ok_some!(Token::from_num(TokenFeed::extract_number(c.1, &mut self.itr)))
+                w if w.is_whitespace() => continue,
+                '(' => return ok_some!(Token::Op(OpToken::Open)),
+                ')' => return ok_some!(Token::Op(OpToken::Close)),
+                '+' => return ok_some!(Token::Op(OpToken::Plus)),
+                '-' => return ok_some!(Token::Op(OpToken::Minus)),
+                '*' => return ok_some!(Token::Op(OpToken::Mul)),
+                '/' => return ok_some!(Token::Op(OpToken::Div)),
+                '^' => return ok_some!(Token::Op(OpToken::Exp)),
+                '%' => return ok_some!(Token::Op(OpToken::Mod)),
+                '=' => return ok_some!(Token::Op(OpToken::Equal)),
+                '0'..='9' => return ok_some!(Token::Num(TokenFeed::extract_number(c.1, &mut self.itr))),
+                w if w.is_alphabetic() || w == '_' => {
+                    return ok_some!(Token::Var(TokenFeed::extract_identifer(c.1, &mut self.itr)?));
                 }
-                c if c.is_whitespace() => continue,
                 _ => {
                     return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
                         "Invalid char in expression",
                         c.0,
-                        Some(c.1),
+                        Some(c.1.to_string()),
                     )))
                 }
             }
@@ -291,6 +327,8 @@ impl<'a> TokenFeed<'a> {
         self._peek.as_ref().unwrap()
     }
 
+    // lazy implementation to get the current location in the code
+    // requires manually offsetting sometimes to get the right location
     fn cur_col(&mut self) -> Option<usize> {
         if let Some(val) = self.itr.peek() {
             return Some(val.0);
@@ -334,6 +372,21 @@ impl<'a> TokenFeed<'a> {
 
         SolverInt::from_str_radix(s.as_str(), radix).unwrap()
     }
+
+    fn extract_identifer(c: char, itr: &mut iter::Peekable<iter::Enumerate<str::Chars>>) -> Result<Identifier, SolverError> {
+        let mut s = String::with_capacity(20);
+        s.push(c);
+
+        while let Some(c) = itr.peek() {
+            if c.1.is_whitespace() || !c.1.is_alphabetic() {
+                break;
+            }
+
+            s.push(itr.next().unwrap().1);
+        }
+
+        Ok(Identifier(s))
+    }
 }
 
 fn should_loop(precedence: i32, feed: &mut TokenFeed) -> Result<bool, SolverError> {
@@ -343,44 +396,53 @@ fn should_loop(precedence: i32, feed: &mut TokenFeed) -> Result<bool, SolverErro
         Err(_) => return Err(feed.next().err().unwrap()),
     };
 
-    let op = unsfe!(next.element.op);
-    Ok(next.token_type == TokenType::Op && op.is_binary() && op.precedence() >= precedence)
+    match next {
+        Token::Op(op) if op.is_binary() && op.precedence() >= precedence => Ok(true),
+        _ => Ok(false),
+    }
 }
 
 // do expression until a token with a lower precedence is found
-fn do_expression(precedence: i32, feed: &mut TokenFeed) -> Result<SolverInt, SolverError> {
+fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) -> Result<SolverInt, SolverError> {
     let cur = match feed.next()? {
         Some(x) => x,
         None => {
             return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
                 "Expected a token",
-                usize::MAX,
+                FEED_OFFSET_END,
                 None,
             )));
         }
     };
 
-    let mut num1 = match cur.token_type {
-        TokenType::Num => unsfe!(cur.element.num),
-        TokenType::Op => match unsfe!(cur.element.op) {
-            OpToken::Minus => -do_expression(OpToken::PRECEDENCE_NEG_TOK, feed)?,
+    // need to keep track if we need an = following an unset identifier
+    let mut unset_ident = false;
+
+    let mut num1 = match &cur {
+        Token::Num(num) => *num,
+        Token::Op(op) => match op {
+            OpToken::Minus => -do_expression(OpToken::PRECEDENCE_NEG_TOK, feed, vars)?,
             OpToken::Open => {
-                let res = do_expression(OpToken::PRECEDENCE_NO_PREC, feed)?;
+                let res = do_expression(OpToken::PRECEDENCE_NO_PREC + 1, feed, vars)?;
                 if let Some(next) = feed.next()? {
-                    if !(next.token_type == TokenType::Op && unsfe!(next.element.op) == OpToken::Close) {
-                        return Err(SolverError::UnbalancedBracketError(ErrorLocation::new(
-                            "Expected a closing bracket",
-                            feed.cur_col().expect("We should be able to peek a token here")
-                                - next.to_string().len()
-                                - 1,
-                            Some(')'),
-                        )));
+                    // we need a closing token here
+                    match next {
+                        Token::Op(op) if op == OpToken::Close => (),
+                        _ => {
+                            return Err(SolverError::UnbalancedBracketError(ErrorLocation::new(
+                                "Expected a closing bracket",
+                                feed.cur_col().expect("We should be able to peek a token here")
+                                    - next.to_string().len()
+                                    - FEED_OFFSET_BEHIND,
+                                Some(")".to_string()),
+                            )))
+                        }
                     }
                 } else {
                     return Err(SolverError::UnbalancedBracketError(ErrorLocation::new(
                         "Expected a closing bracket",
-                        usize::MAX,
-                        Some(')'),
+                        FEED_OFFSET_END,
+                        Some(")".to_string()),
                     )));
                 }
 
@@ -390,20 +452,38 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed) -> Result<SolverInt, Sol
                 return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
                     "Unexpected token",
                     match feed.cur_col() {
-                        Some(i) => i - 1,
+                        Some(i) => i - FEED_OFFSET_ON,
                         None => usize::MAX,
                     },
                     None,
                 )));
             }
         },
+        Token::Var(ref ident) => {
+            if let Some(num) = vars.get(&ident) {
+                *num
+            } else {
+                unset_ident = true;
+                0xDEADBEEF
+            }
+        }
     };
 
     while should_loop(precedence, feed)? {
+        let cur_col = feed.cur_col();
         let next = feed.next()?.unwrap();
-        let op = unsfe!(next.element.op);
+        let op = next.as_op();
 
-        let num2 = do_expression(op.precedence() + op.prec_bump(), feed)?;
+        let num2 = do_expression(op.precedence() + op.prec_bump(), feed, vars)?;
+
+        // special case this one for nice error printing
+        if unset_ident && OpToken::Equal != op {
+            return Err(SolverError::UnsetVariableError(ErrorLocation::new(
+                "= must immediately follow an unset variable:",
+                cur_col.expect("We should be able to peek a token here") - next.to_string().len(),
+                Some(cur.as_var().to_string()),
+            )));
+        }
 
         match op {
             OpToken::Plus => num1 += num2,
@@ -412,27 +492,54 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed) -> Result<SolverInt, Sol
             OpToken::Div => num1 /= num2,
             OpToken::Mod => num1 %= num2,
             OpToken::Exp => num1 = num1.pow(u32::try_from(num2)?),
-            OpToken::_Equal => return Err(SolverError::NotImplementedError),
+            OpToken::Equal => {
+                num1 = num2;
+                vars.update(cur.as_var(), num1);
+                unset_ident = false;
+            }
             _ => {
                 // I don't think it's possible to hit here, in case the condition is found
-                panic!("hit here... save the equation and write a test");
+                unreachable!("hit here... save the equation and write a test");
             }
         }
+    }
+
+    // if we are finished with this level of the expression tree all
+    // variables at this point must be resolved
+    if unset_ident {
+        return Err(SolverError::UnsetVariableError(ErrorLocation::new(
+            "Unset variable in expression:",
+            match feed.cur_col() {
+                Some(i) => i - FEED_OFFSET_VAR_ON,
+                None => usize::MAX,
+            },
+            Some(cur.as_var().to_string()),
+        )));
     }
 
     Ok(num1)
 }
 
-pub fn solve(expr: &str) -> Result<SolverInt, SolverError> {
-    let mut tokenfeed = TokenFeed::new(expr.to_string());
-    let res = do_expression(0, &mut tokenfeed);
+pub fn solve<S: Into<String>>(expr: S, vars: Option<&mut Variables>) -> Result<SolverInt, SolverError> {
+    let mut tokenfeed = TokenFeed::new(expr.into());
+    let mut vars = vars;
+
+    let res = match vars {
+        Some(ref mut variables) => do_expression(OpToken::PRECEDENCE_NO_PREC, &mut tokenfeed, variables),
+        None => do_expression(OpToken::PRECEDENCE_NO_PREC, &mut tokenfeed, &mut Variables::new()),
+    };
+
     if let Ok(num) = res {
         if let Ok(None) = tokenfeed.next() {
+            if let Some(v) = vars {
+                v.update(v.result_identifier(), num);
+            }
+
             Ok(num)
         } else {
             Err(SolverError::InvalidExpressionError(ErrorLocation::new(
                 "Unused tokens",
-                usize::MAX,
+                FEED_OFFSET_END,
                 None,
             )))
         }
@@ -446,7 +553,7 @@ mod tests {
     use super::*;
 
     const OPS: [OpToken; 9] = [
-        OpToken::_Equal,
+        OpToken::Equal,
         OpToken::Plus,
         OpToken::Minus,
         OpToken::Mul,
@@ -470,8 +577,10 @@ mod tests {
         }
     }
 
-    fn call_eq(expr: &str, expected: SolverInt) -> Result<(), TestError> {
-        let actual = solve(expr);
+    fn call_eq<S: Into<String>>(expr: S, expected: SolverInt, vars: Option<&mut Variables>) -> Result<(), TestError> {
+        let expr = expr.into();
+        println!("running [{}]", expr);
+        let actual = solve(&expr, vars);
         match actual {
             Ok(actual) => {
                 if actual == expected {
@@ -490,7 +599,7 @@ mod tests {
 
     macro_rules! expect_error {
         ($equation:expr, $err:path) => {
-            let res = solve($equation);
+            let res = solve($equation, None);
             if let Err($err(_)) = res {
             } else {
                 return Err(TestError {
@@ -510,15 +619,15 @@ mod tests {
     fn test_basic_ops() -> Result<(), TestError> {
         for op in OPS.iter() {
             match op {
-                OpToken::_Equal => assert!("not implemented" != ""),
-                OpToken::Plus => call_eq("5 + 5", 10)?,
-                OpToken::Minus => call_eq("-5 -2", -7)?,
-                OpToken::Mul => call_eq("12*15", 180)?,
-                OpToken::Div => call_eq("12/3", 4)?,
-                OpToken::Mod => call_eq("8%5", 3)?,
-                OpToken::Exp => call_eq("9^3", 729)?,
-                OpToken::Open => call_eq("(5+1)*2", 12)?,
-                OpToken::Close => call_eq("(3-7)/-2", 2)?,
+                OpToken::Equal => call_eq("a = 5", 5, None)?,
+                OpToken::Plus => call_eq("5 + 5", 10, None)?,
+                OpToken::Minus => call_eq("-5 -2", -7, None)?,
+                OpToken::Mul => call_eq("12*15", 180, None)?,
+                OpToken::Div => call_eq("12/3", 4, None)?,
+                OpToken::Mod => call_eq("8%5", 3, None)?,
+                OpToken::Exp => call_eq("9^3", 729, None)?,
+                OpToken::Open => call_eq("(5+1)*2", 12, None)?,
+                OpToken::Close => call_eq("(3-7)/-2", 2, None)?,
             }
         }
 
@@ -527,15 +636,15 @@ mod tests {
 
     #[test]
     fn test_exp_right_assoc() -> Result<(), TestError> {
-        call_eq("2^3^2", 512)?;
+        call_eq("2^3^2", 512, None)?;
         Ok(())
     }
 
     #[test]
     fn test_0_padding() -> Result<(), TestError> {
-        call_eq("00000100 * 110011", 11001100)?;
-        call_eq("0 + 5", 5)?;
-        call_eq("0 * -1", 0)?;
+        call_eq("00000100 * 110011", 11001100, None)?;
+        call_eq("0 + 5", 5, None)?;
+        call_eq("0 * -1", 0, None)?;
         Ok(())
     }
 
@@ -550,7 +659,7 @@ mod tests {
         ];
 
         for input in inputs.iter() {
-            call_eq(input.0, input.1)?;
+            call_eq(input.0, input.1, None)?;
         }
 
         Ok(())
@@ -571,10 +680,11 @@ mod tests {
             ("5*5 - 1 ^10 * 55000 / 100 ", -525),
             ("6 + (16 - 4)/(2^2 + 2) - 2", 6),
             ("(4 + 8)/(2 + 1) - (3 - 1) + 2", 4),
+            ("-5 ^ 3 * -4 + 7 - -10", 517),
         ];
 
         for input in inputs.iter() {
-            call_eq(input.0, input.1)?;
+            call_eq(input.0, input.1, None)?;
         }
 
         Ok(())
@@ -582,7 +692,7 @@ mod tests {
 
     #[test]
     fn test_parse_errors() -> Result<(), TestError> {
-        expect_error!("2 - 2asf", SolverError::InvalidExpressionError);
+        expect_error!("2 - 2a$f", SolverError::InvalidExpressionError);
         expect_error!("(3+1) + ) + 2", SolverError::InvalidExpressionError);
         expect_error!("((3+1)", SolverError::UnbalancedBracketError);
         expect_error!("(3+1 1*2", SolverError::UnbalancedBracketError);
@@ -593,6 +703,48 @@ mod tests {
         expect_error!("(6+1", SolverError::UnbalancedBracketError);
         expect_error!("3 2", SolverError::InvalidExpressionError);
         expect_error!("6+1)", SolverError::InvalidExpressionError);
+        expect_error!("15 + a", SolverError::UnsetVariableError);
+        expect_error!("a", SolverError::UnsetVariableError);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_res_var_is_updated() -> Result<(), TestError> {
+        let mut vars = Variables::new();
+        let res_ident = vars.result_identifier();
+
+        call_eq("5*5", 25, Some(&mut vars))?;
+        assert_eq!(25, *vars.get(&res_ident).unwrap());
+
+        call_eq("3-2", 1, Some(&mut vars))?;
+        assert_eq!(1, *vars.get(&res_ident).unwrap());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_variables() -> Result<(), TestError> {
+        let mut vars = Variables::new();
+        let res_ident = vars.result_identifier();
+
+        let a = "a".to_string();
+        let b = "b".to_string();
+        let c = "c".to_string();
+        let d = "d".to_string();
+
+        call_eq(format!("{a}=15", a = a), 15, Some(&mut vars))?;
+        assert_eq!(vars.get(&Identifier(a.clone())).unwrap(), vars.get(&res_ident).unwrap());
+
+        call_eq(format!("{b} = {a} * _", b = b, a = a), 225, Some(&mut vars))?;
+        assert_eq!(vars.get(&Identifier(b.clone())).unwrap(), vars.get(&res_ident).unwrap());
+
+        call_eq(format!("{c} = {b}/({a}^3/_) * 10", c = c, b = b, a = a), 150, Some(&mut vars))?;
+        assert_eq!(*vars.get(&Identifier(c)).unwrap(), 150);
+
+        call_eq(format!("{d}=4", d = d), 4, Some(&mut vars))?;
+        call_eq(format!("{d}/{d}+5", d = d), 6, Some(&mut vars))?;
+
         Ok(())
     }
 }

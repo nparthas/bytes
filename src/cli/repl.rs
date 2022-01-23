@@ -20,12 +20,14 @@ impl fmt::Display for ReplError {
 
 enum MetaToken {
     Exit,
+    Vars,
     Unrecognized,
 }
 
 fn tokenize_meta(line: &str) -> MetaToken {
     match line {
         ".exit" => MetaToken::Exit,
+        ".vars" => MetaToken::Vars,
         _ => MetaToken::Unrecognized,
     }
 }
@@ -42,9 +44,12 @@ pub fn main_loop() -> Result<(), ReplError> {
     println!("{} cli:", version_info);
 
     let mut repl = build_prompt();
+    let mut vars = expression::Variables::new();
+
+    const PROMPT: &str = "# ";
 
     loop {
-        let readline = repl.readline("# ");
+        let readline = repl.readline(PROMPT);
         match readline {
             Ok(line) => {
                 let lpad = line.len() - line.trim_start().len();
@@ -56,6 +61,7 @@ pub fn main_loop() -> Result<(), ReplError> {
                 if line.starts_with(META_PREFIX) {
                     match tokenize_meta(&line) {
                         MetaToken::Exit => break,
+                        MetaToken::Vars => println!("{}", vars),
                         MetaToken::Unrecognized => {
                             println!("unrecognized meta command '{}'", line);
                             continue;
@@ -65,20 +71,22 @@ pub fn main_loop() -> Result<(), ReplError> {
                     repl.add_history_entry(line);
 
                     let s = std::time::Instant::now();
-                    let expr = expression::solve(&line);
+                    let expr = expression::solve(line, Some(&mut vars));
                     let d = s.elapsed();
 
                     match expr {
                         Ok(res) => println!("{}    [{:?}]", expression::format(res), d),
                         Err(err) => match err {
-                            expression::SolverError::ParseUnsignedPowError(_)
-                            | expression::SolverError::NotImplementedError => println!("{}", err),
+                            expression::SolverError::ParseUnsignedPowError(_) | expression::SolverError::NotImplementedError => {
+                                println!("{}", err)
+                            }
                             expression::SolverError::InvalidExpressionError(e)
-                            | expression::SolverError::UnbalancedBracketError(e) => {
-                                if e.get_loc() != usize::MAX {
-                                    println!("{: <1$}^", "", e.get_loc() + 2);
+                            | expression::SolverError::UnbalancedBracketError(e)
+                            | expression::SolverError::UnsetVariableError(e) => {
+                                if e.get_loc() != expression::FEED_OFFSET_END {
+                                    println!("{: <1$}^", "", PROMPT.len() + e.get_loc());
                                 } else {
-                                    println!("{: <1$}^", "", line.len() + lpad + 2);
+                                    println!("{: <1$}^", "", PROMPT.len() + line.len() + lpad);
                                 }
 
                                 println!("{}", e);
