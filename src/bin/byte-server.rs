@@ -14,12 +14,7 @@ async fn main() {
         .add_filter_ignore_str("rustyline")
         .set_time_to_local(true)
         .build();
-    WriteLogger::init(
-        LevelFilter::Trace,
-        log_config,
-        File::create("server.log").unwrap(),
-    )
-    .unwrap();
+    WriteLogger::init(LevelFilter::Trace, log_config, File::create("server.log").unwrap()).unwrap();
 
     debug!("Starting server...");
 

@@ -3,9 +3,10 @@ use rustyline::error::ReadlineError;
 use rustyline::{CompletionType, Config, Editor};
 use std::{env, fmt};
 
-const META_PREFIX: char = '.';
-
 use crate::expression;
+
+const META_PREFIX: char = '.';
+const PROMPT: &str = "# ";
 
 #[derive(Debug)]
 pub enum ReplError {
@@ -21,6 +22,7 @@ impl fmt::Display for ReplError {
 enum MetaToken {
     Exit,
     Vars,
+    Format,
     Unrecognized,
 }
 
@@ -28,6 +30,7 @@ fn tokenize_meta(line: &str) -> MetaToken {
     match line {
         ".exit" => MetaToken::Exit,
         ".vars" => MetaToken::Vars,
+        line if line.starts_with("./") => MetaToken::Format,
         _ => MetaToken::Unrecognized,
     }
 }
@@ -45,8 +48,7 @@ pub fn main_loop() -> Result<(), ReplError> {
 
     let mut repl = build_prompt();
     let mut vars = expression::Variables::new();
-
-    const PROMPT: &str = "# ";
+    let mut formatter = expression::Formatter::new();
 
     loop {
         let readline = repl.readline(PROMPT);
@@ -54,28 +56,44 @@ pub fn main_loop() -> Result<(), ReplError> {
             Ok(line) => {
                 let lpad = line.len() - line.trim_start().len();
                 let line = line.trim();
-                if line == "" {
+                if "" == line {
                     continue;
                 }
+
+                repl.add_history_entry(line);
 
                 if line.starts_with(META_PREFIX) {
                     match tokenize_meta(&line) {
                         MetaToken::Exit => break,
                         MetaToken::Vars => println!("{}", vars),
+                        MetaToken::Format => match formatter.update_fmt(&line[1..]) {
+                            Ok(()) => {
+                                println!("Set format: {}", formatter.get_fmt());
+                                continue;
+                            }
+                            Err(e) => {
+                                println!("Error: {}", e);
+                                continue;
+                            }
+                        },
                         MetaToken::Unrecognized => {
                             println!("unrecognized meta command '{}'", line);
                             continue;
                         }
                     }
                 } else {
-                    repl.add_history_entry(line);
-
                     let s = std::time::Instant::now();
                     let expr = expression::solve(line, Some(&mut vars));
                     let d = s.elapsed();
 
                     match expr {
-                        Ok(res) => println!("{}    [{:?}]", expression::format(res), d),
+                        Ok(res) => match formatter.format(res) {
+                            expression::FormatResult::Ok(num) => println!("{}          [{:?}]", num, d),
+                            expression::FormatResult::OverWidth(num, width) => {
+                                println!("Warning: result wider than {}-bit", width);
+                                println!("{}          [{:?}]", num, d);
+                            }
+                        },
                         Err(err) => match err {
                             expression::SolverError::ParseUnsignedPowError(_) | expression::SolverError::NotImplementedError => {
                                 println!("{}", err)

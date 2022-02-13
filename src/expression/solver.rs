@@ -6,10 +6,13 @@ use std::mem;
 use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: brackets next to each other
+// TODO:: log_2
 // TODO:: shift ops >>/<<
+// TODO:: brackets next to each other
 // TODO:: floating point support
-// TODO:: sqrt/exp/log
+// TODO:: handle 0b66 better
+// TODO:: large num support
+// TODO:: sqrt/exp
 
 pub type SolverInt = isize;
 
@@ -302,7 +305,7 @@ impl<'a> TokenFeed<'a> {
                 '%' => return ok_some!(Token::Op(OpToken::Mod)),
                 '=' => return ok_some!(Token::Op(OpToken::Equal)),
                 '0'..='9' => return ok_some!(Token::Num(TokenFeed::extract_number(c.1, &mut self.itr))),
-                w if w.is_alphabetic() || w == '_' => {
+                w if w.is_alphabetic() || '_' == w => {
                     return ok_some!(Token::Var(TokenFeed::extract_identifer(c.1, &mut self.itr)?));
                 }
                 _ => {
@@ -427,7 +430,7 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
                 if let Some(next) = feed.next()? {
                     // we need a closing token here
                     match next {
-                        Token::Op(op) if op == OpToken::Close => (),
+                        Token::Op(op) if OpToken::Close == op => (),
                         _ => {
                             return Err(SolverError::UnbalancedBracketError(ErrorLocation::new(
                                 "Expected a closing bracket",

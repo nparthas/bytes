@@ -27,9 +27,7 @@ pub fn start_server() -> std::io::Result<actix_web::dev::Server> {
                         let err = format!(r#"{{"error":"{}"}}"#, err);
                         error::InternalError::from_response(
                             err.clone(),
-                            HttpResponse::BadRequest()
-                                .content_type("application/json")
-                                .body(err),
+                            HttpResponse::BadRequest().content_type("application/json").body(err),
                         )
                         .into()
                     }),
