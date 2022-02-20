@@ -6,15 +6,16 @@ use std::mem;
 use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: move exp to xor
-// TODO:: log_2 + exp
+// TODO:: dealing with overflow/signed/unsigned
 // TODO:: shift ops >>/<<
 // TODO:: logical ops
+// TODO:: log_2 + exp
 // TODO:: brackets next to each other
 // TODO:: floating point support
 // TODO:: handle 0b66 better
 // TODO:: large num support
 // TODO:: sqrt
+// TODO:: .help  + print meta commands on incorrect command
 
 pub type SolverInt = isize;
 
@@ -217,24 +218,30 @@ enum OpToken {
     Close,
     BitAnd,
     BitOr,
+    BitXor,
+    BitNot,
 }
 
 impl OpToken {
     fn precedence(&self) -> i32 {
         match &self {
-            OpToken::BitOr => 1,
-            OpToken::BitAnd => 2,
-            OpToken::Equal => 3,
-            OpToken::Plus | OpToken::Minus => 4,
-            OpToken::Mul | OpToken::Div | OpToken::Mod => 6,
-            OpToken::Exp => 7,
-            OpToken::Open | OpToken::Close => 8,
+            // PRECEDENCE_NO_PREC goes here (0)
+            OpToken::Equal => 1,
+            OpToken::BitOr => 2,
+            OpToken::BitXor => 3,
+            OpToken::BitAnd => 4,
+            OpToken::Plus | OpToken::Minus => 5,
+            // PRECEDENCE_NEG_TOK goes here (6)
+            OpToken::Mul | OpToken::Div | OpToken::Mod => 7,
+            OpToken::BitNot => 8,
+            OpToken::Exp => 9,
+            OpToken::Open | OpToken::Close => 10,
         }
     }
 
     fn is_binary(&self) -> bool {
         match &self {
-            OpToken::Open | OpToken::Close => false,
+            OpToken::Open | OpToken::Close | OpToken::BitNot => false,
             OpToken::Equal
             | OpToken::Plus
             | OpToken::Minus
@@ -243,7 +250,8 @@ impl OpToken {
             | OpToken::Mod
             | OpToken::Exp
             | OpToken::BitAnd
-            | OpToken::BitOr => true,
+            | OpToken::BitOr
+            | OpToken::BitXor => true,
         }
     }
 
@@ -266,29 +274,72 @@ impl OpToken {
             | OpToken::Open
             | OpToken::Close
             | OpToken::BitAnd
-            | OpToken::BitOr => false,
+            | OpToken::BitOr
+            | OpToken::BitXor
+            | OpToken::BitNot => false,
         }
     }
 
     const PRECEDENCE_NO_PREC: i32 = 0;
-    const PRECEDENCE_NEG_TOK: i32 = 5;
+    const PRECEDENCE_NEG_TOK: i32 = 6;
+    const OPS: [OpToken; 13] = [
+        OpToken::Equal,
+        OpToken::Plus,
+        OpToken::Minus,
+        OpToken::Mul,
+        OpToken::Div,
+        OpToken::Mod,
+        OpToken::Exp,
+        OpToken::Open,
+        OpToken::Close,
+        OpToken::BitAnd,
+        OpToken::BitOr,
+        OpToken::BitXor,
+        OpToken::BitNot,
+    ];
 }
 
 impl fmt::Display for OpToken {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match &self {
-            OpToken::Equal => write!(f, "+"),
-            OpToken::Exp => write!(f, "^"),
-            OpToken::Plus => write!(f, "+"),
-            OpToken::Minus => write!(f, "-"),
-            OpToken::Mul => write!(f, "*"),
-            OpToken::Div => write!(f, "/"),
-            OpToken::Mod => write!(f, "%"),
-            OpToken::Open => write!(f, "("),
-            OpToken::Close => write!(f, ")"),
-            OpToken::BitAnd => write!(f, "&"),
-            OpToken::BitOr => write!(f, "|"),
+        if f.alternate() {
+            match &self {
+                OpToken::Equal => write!(f, "{:18}=", "Assignment/Equal:"),
+                OpToken::Exp => write!(f, "{:18}#", "Exponent:"),
+                OpToken::Plus => write!(f, "{:18}+", "Plus:"),
+                OpToken::Minus => write!(f, "{:18}-", "Subtract:"),
+                OpToken::Mul => write!(f, "{:18}*", "Multiply:"),
+                OpToken::Div => write!(f, "{:18}/", "(Integer) Divide:"),
+                OpToken::Mod => write!(f, "{:18}%", "Modulo:"),
+                OpToken::Open => write!(f, "{:18}(", "Open Bracket:"),
+                OpToken::Close => write!(f, "{:18})", "Close Bracket:"),
+                OpToken::BitAnd => write!(f, "{:18}&", "Bitwise And:"),
+                OpToken::BitOr => write!(f, "{:18}|", "Bitwise Or:"),
+                OpToken::BitXor => write!(f, "{:18}^", "Bitwise Xor:"),
+                OpToken::BitNot => write!(f, "{:18}~", "Bitwise Not:"),
+            }
+        } else {
+            match &self {
+                OpToken::Equal => write!(f, "="),
+                OpToken::Exp => write!(f, "#"),
+                OpToken::Plus => write!(f, "+"),
+                OpToken::Minus => write!(f, "-"),
+                OpToken::Mul => write!(f, "*"),
+                OpToken::Div => write!(f, "/"),
+                OpToken::Mod => write!(f, "%"),
+                OpToken::Open => write!(f, "("),
+                OpToken::Close => write!(f, ")"),
+                OpToken::BitAnd => write!(f, "&"),
+                OpToken::BitOr => write!(f, "|"),
+                OpToken::BitXor => write!(f, "^"),
+                OpToken::BitNot => write!(f, "~"),
+            }
         }
+    }
+}
+
+pub fn print_ops() {
+    for op in &OpToken::OPS {
+        println!("{:#}", op);
     }
 }
 
@@ -325,11 +376,13 @@ impl<'a> TokenFeed<'a> {
                 '-' => return ok_some!(Token::Op(OpToken::Minus)),
                 '*' => return ok_some!(Token::Op(OpToken::Mul)),
                 '/' => return ok_some!(Token::Op(OpToken::Div)),
-                '^' => return ok_some!(Token::Op(OpToken::Exp)),
+                '#' => return ok_some!(Token::Op(OpToken::Exp)),
                 '%' => return ok_some!(Token::Op(OpToken::Mod)),
                 '=' => return ok_some!(Token::Op(OpToken::Equal)),
                 '&' => return ok_some!(Token::Op(OpToken::BitAnd)),
                 '|' => return ok_some!(Token::Op(OpToken::BitOr)),
+                '^' => return ok_some!(Token::Op(OpToken::BitXor)),
+                '~' => return ok_some!(Token::Op(OpToken::BitNot)),
                 '0'..='9' => return ok_some!(Token::Num(TokenFeed::extract_number(c.1, &mut self.itr))),
                 w if w.is_alphabetic() || '_' == w => {
                     return ok_some!(Token::Var(TokenFeed::extract_identifer(c.1, &mut self.itr)?));
@@ -451,6 +504,11 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
         Token::Num(num) => *num,
         Token::Op(op) => match op {
             OpToken::Minus => -do_expression(OpToken::PRECEDENCE_NEG_TOK, feed, vars)?,
+            OpToken::BitNot => {
+                let res = do_expression(OpToken::BitNot.precedence(), feed, vars)?;
+                println!("res: {}", res);
+                !res
+            }
             OpToken::Open => {
                 let res = do_expression(OpToken::PRECEDENCE_NO_PREC + 1, feed, vars)?;
                 if let Some(next) = feed.next()? {
@@ -489,7 +547,7 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
             }
         },
         Token::Var(ref ident) => {
-            if let Some(num) = vars.get(&ident) {
+            if let Some(num) = vars.get(ident) {
                 *num
             } else {
                 unset_ident = true;
@@ -528,6 +586,7 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
             }
             OpToken::BitAnd => num1 &= num2,
             OpToken::BitOr => num1 |= num2,
+            OpToken::BitXor => num1 ^= num2,
             _ => {
                 unreachable!("missed handling on op... save the equation and write a test");
             }
@@ -582,20 +641,7 @@ pub fn solve<S: Into<String>>(expr: S, vars: Option<&mut Variables>) -> Result<S
 mod tests {
     use super::*;
 
-    const OPS: [OpToken; 11] = [
-        OpToken::Equal,
-        OpToken::Plus,
-        OpToken::Minus,
-        OpToken::Mul,
-        OpToken::Div,
-        OpToken::Mod,
-        OpToken::Exp,
-        OpToken::Open,
-        OpToken::Close,
-        OpToken::BitAnd,
-        OpToken::BitOr,
-    ];
-
+    #[allow(dead_code)]
     #[derive(Debug)]
     struct TestError {
         reason: String,
@@ -650,7 +696,7 @@ mod tests {
     #[test]
     fn test_basic_ops() -> Result<(), TestError> {
         // make sure to add the enum variant to the array
-        for op in OPS.iter() {
+        for op in OpToken::OPS.iter() {
             match op {
                 OpToken::Equal => call_eq("a = 5", 5, None)?,
                 OpToken::Plus => call_eq("5 + 5", 10, None)?,
@@ -658,11 +704,13 @@ mod tests {
                 OpToken::Mul => call_eq("12*15", 180, None)?,
                 OpToken::Div => call_eq("12/3", 4, None)?,
                 OpToken::Mod => call_eq("8%5", 3, None)?,
-                OpToken::Exp => call_eq("9^3", 729, None)?,
+                OpToken::Exp => call_eq("9#3", 729, None)?,
                 OpToken::Open => call_eq("(5+1)*2", 12, None)?,
                 OpToken::Close => call_eq("(3-7)/-2", 2, None)?,
                 OpToken::BitAnd => call_eq("0xFF & 0xA1", 0xA1, None)?,
                 OpToken::BitOr => call_eq("0b1100 | 0b0011", 0b1111, None)?,
+                OpToken::BitXor => call_eq("0b1100 ^ 0b1010", 0b0110, None)?,
+                OpToken::BitNot => call_eq("~0", -1, None)?,
             }
         }
 
@@ -671,7 +719,7 @@ mod tests {
 
     #[test]
     fn test_exp_right_assoc() -> Result<(), TestError> {
-        call_eq("2^3^2", 512, None)?;
+        call_eq("2#3#2", 512, None)?;
         Ok(())
     }
 
@@ -705,17 +753,18 @@ mod tests {
         let inputs = [
             ("(5+2)*2", 14),
             ("(3-1)*10", 20),
-            ("(2*3)^2", 36),
+            ("(2*3)#2", 36),
             ("(1-2)*5", -5),
             ("3*(8/2) + 1", 13),
             ("-5 * (-3+1)/2", 5),
-            ("((2+1)*4)^2", 144),
+            ("((2+1)*4)#2", 144),
             ("36/(1+2)", 12),
             ("5*2 +1", 11),
-            ("5*5 - 1 ^10 * 55000 / 100 ", -525),
-            ("6 + (16 - 4)/(2^2 + 2) - 2", 6),
+            ("5*5 - 1 #10 * 55000 / 100 ", -525),
+            ("6 + (16 - 4)/(2#2 + 2) - 2", 6),
             ("(4 + 8)/(2 + 1) - (3 - 1) + 2", 4),
-            ("-5 ^ 3 * -4 + 7 - -10", 517),
+            ("-5 # 3 * -4 + 7 - -10", 517),
+            ("0b1001 | 0b0110 ^  0b0100 & ~0b1001", 0b1011),
         ];
 
         for input in inputs.iter() {
@@ -732,7 +781,7 @@ mod tests {
         expect_error!("((3+1)", SolverError::UnbalancedBracketError);
         expect_error!("(3+1 1*2", SolverError::UnbalancedBracketError);
         expect_error!("5 *2 - a$sdf$", SolverError::InvalidExpressionError);
-        expect_error!("2^-1", SolverError::ParseUnsignedPowError);
+        expect_error!("2#-1", SolverError::ParseUnsignedPowError);
         expect_error!("", SolverError::InvalidExpressionError);
         expect_error!("3++2", SolverError::InvalidExpressionError);
         expect_error!("(6+1", SolverError::UnbalancedBracketError);
@@ -767,6 +816,7 @@ mod tests {
         let b = "b".to_string();
         let c = "c".to_string();
         let d = "d".to_string();
+        let e = "d".to_string();
 
         call_eq(format!("{a}=15", a = a), 15, Some(&mut vars))?;
         assert_eq!(vars.get(&Identifier(a.clone())).unwrap(), vars.get(&res_ident).unwrap());
@@ -774,11 +824,18 @@ mod tests {
         call_eq(format!("{b} = {a} * _", b = b, a = a), 225, Some(&mut vars))?;
         assert_eq!(vars.get(&Identifier(b.clone())).unwrap(), vars.get(&res_ident).unwrap());
 
-        call_eq(format!("{c} = {b}/({a}^3/_) * 10", c = c, b = b, a = a), 150, Some(&mut vars))?;
+        call_eq(format!("{c} = {b}/({a}#3/_) * 10", c = c, b = b, a = a), 150, Some(&mut vars))?;
         assert_eq!(*vars.get(&Identifier(c)).unwrap(), 150);
 
         call_eq(format!("{d}=4", d = d), 4, Some(&mut vars))?;
         call_eq(format!("{d}/{d}+5", d = d), 6, Some(&mut vars))?;
+
+        call_eq(
+            format!("{e}=0b1001 | 0b0110 ^  0b0100 & ~0b1001", e = e),
+            0b1011,
+            Some(&mut vars),
+        )?;
+        assert_eq!(*vars.get(&Identifier(e)).unwrap(), 0b1011);
 
         Ok(())
     }

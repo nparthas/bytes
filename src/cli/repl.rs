@@ -23,6 +23,8 @@ enum MetaToken {
     Exit,
     Vars,
     Format,
+    Ops,
+    NumType,
     Unrecognized,
 }
 
@@ -31,6 +33,8 @@ fn tokenize_meta(line: &str) -> MetaToken {
         ".exit" => MetaToken::Exit,
         ".vars" => MetaToken::Vars,
         line if line.starts_with("./") => MetaToken::Format,
+        ".ops" => MetaToken::Ops,
+        ".num_type" => MetaToken::NumType,
         _ => MetaToken::Unrecognized,
     }
 }
@@ -56,14 +60,14 @@ pub fn main_loop() -> Result<(), ReplError> {
             Ok(line) => {
                 let lpad = line.len() - line.trim_start().len();
                 let line = line.trim();
-                if "" == line {
+                if line.is_empty() {
                     continue;
                 }
 
                 repl.add_history_entry(line);
 
                 if line.starts_with(META_PREFIX) {
-                    match tokenize_meta(&line) {
+                    match tokenize_meta(line) {
                         MetaToken::Exit => break,
                         MetaToken::Vars => println!("{}", vars),
                         MetaToken::Format => match formatter.update_fmt(&line[1..]) {
@@ -76,6 +80,17 @@ pub fn main_loop() -> Result<(), ReplError> {
                                 continue;
                             }
                         },
+                        MetaToken::Ops => expression::print_ops(),
+                        MetaToken::NumType => {
+                            // type is signed
+                            let signed = if expression::SolverInt::min_value() < 0 {
+                                "signed"
+                            } else {
+                                "unsigend"
+                            };
+
+                            println!("{}-bit {} integer", expression::SolverInt::BITS, signed);
+                        }
                         MetaToken::Unrecognized => {
                             println!("unrecognized meta command '{}'", line);
                             continue;

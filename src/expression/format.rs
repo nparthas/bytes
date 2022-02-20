@@ -63,7 +63,7 @@ impl Bits {
         }
     }
 
-    fn to_num(&self) -> FormatInt {
+    fn to_num(self) -> FormatInt {
         match self {
             Bits::Two => 2,
             Bits::Four => 4,
@@ -155,7 +155,7 @@ impl Formatter {
 
             match itr.next() {
                 Some('d') => {
-                    if len != "" {
+                    if !len.is_empty() {
                         return Err(FormatError::InvalidFormatString(
                             "Length argument not available with decimal format",
                         ));
@@ -288,6 +288,7 @@ impl Default for Formatter {
 mod tests {
     use super::*;
 
+    #[allow(dead_code)]
     #[derive(Debug)]
     struct TestError {
         reason: String,
