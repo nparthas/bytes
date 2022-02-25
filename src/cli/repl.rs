@@ -4,6 +4,7 @@ use rustyline::{CompletionType, Config, Editor};
 use std::{env, fmt};
 
 use crate::expression;
+use crate::expression::solver::IsSigned;
 
 const META_PREFIX: char = '.';
 const PROMPT: &str = "# ";
@@ -83,7 +84,7 @@ pub fn main_loop() -> Result<(), ReplError> {
                         MetaToken::Ops => expression::print_ops(),
                         MetaToken::NumType => {
                             // type is signed
-                            let signed = if expression::SolverInt::min_value() < 0 {
+                            let signed = if expression::SolverInt::is_signed() {
                                 "signed"
                             } else {
                                 "unsigend"
@@ -113,7 +114,8 @@ pub fn main_loop() -> Result<(), ReplError> {
                             expression::SolverError::ParseUnsignedPowError(_) | expression::SolverError::NotImplementedError => {
                                 println!("{}", err)
                             }
-                            expression::SolverError::InvalidExpressionError(e)
+                            expression::SolverError::ParseTooLargeNumError(e)
+                            | expression::SolverError::InvalidExpressionError(e)
                             | expression::SolverError::UnbalancedBracketError(e)
                             | expression::SolverError::UnsetVariableError(e) => {
                                 if e.get_loc() != expression::FEED_OFFSET_END {

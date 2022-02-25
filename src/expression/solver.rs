@@ -6,18 +6,66 @@ use std::mem;
 use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: dealing with overflow/signed/unsigned
 // TODO:: shift ops >>/<<
 // TODO:: logical ops
-// TODO:: log_2 + exp
-// TODO:: brackets next to each other
-// TODO:: floating point support
+// TODO:: log_2 + exp + sqrt
 // TODO:: handle 0b66 better
-// TODO:: large num support
-// TODO:: sqrt
 // TODO:: .help  + print meta commands on incorrect command
 
-pub type SolverInt = isize;
+pub type SolverInt = usize;
+
+pub trait IsSigned {
+    fn is_signed() -> bool;
+}
+
+impl IsSigned for SolverInt {
+    // in case we change the type in the future actually do a check
+    #[allow(unused_comparisons, clippy::absurd_extreme_comparisons)]
+    fn is_signed() -> bool {
+        SolverInt::MIN < 0
+    }
+}
+
+// unary `-` not supported for unsigned types, use 2's complement identity
+// ~x = -(x+1)
+trait TwosC {
+    type Output;
+    fn twosc(self) -> Self::Output;
+    fn div(self, other: Self::Output) -> Self::Output;
+}
+
+impl TwosC for SolverInt {
+    type Output = Self;
+    fn twosc(self) -> Self::Output {
+        (!self).wrapping_add(1)
+    }
+
+    fn div(self, other: Self::Output) -> Self::Output {
+        // the way the expression parses num1 won't ever be negative
+        // but handle anyway for completeness
+        let mut num1 = self;
+        let mut num2 = other;
+
+        let sign1 = num1 >> (Self::BITS - 1);
+        let sign2 = num2 >> (Self::BITS - 1);
+
+        if 0 != sign1 {
+            num1 = num1.twosc();
+        }
+
+        if 0 != sign2 {
+            num2 = num2.twosc();
+        }
+
+        let mut res = num1 / num2;
+
+        if 0 != sign1 ^ sign2 {
+            res = res.twosc();
+        }
+
+        res
+    }
+}
 
 pub const FEED_OFFSET_END: usize = usize::MAX;
 const FEED_OFFSET_BEHIND: usize = 1;
@@ -55,6 +103,7 @@ macro_rules! extract_on_radix {
 #[derive(Debug)]
 pub enum SolverError {
     ParseUnsignedPowError(TryFromIntError),
+    ParseTooLargeNumError(ErrorLocation),
     InvalidExpressionError(ErrorLocation),
     UnbalancedBracketError(ErrorLocation),
     UnsetVariableError(ErrorLocation),
@@ -104,6 +153,7 @@ impl fmt::Display for SolverError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match &self {
             SolverError::ParseUnsignedPowError(_) => write!(f, "Negative powers are not supported"),
+            SolverError::ParseTooLargeNumError(e) => e.fmt(f),
             SolverError::InvalidExpressionError(e) => e.fmt(f),
             SolverError::UnbalancedBracketError(e) => e.fmt(f),
             SolverError::UnsetVariableError(e) => e.fmt(f),
@@ -383,9 +433,9 @@ impl<'a> TokenFeed<'a> {
                 '|' => return ok_some!(Token::Op(OpToken::BitOr)),
                 '^' => return ok_some!(Token::Op(OpToken::BitXor)),
                 '~' => return ok_some!(Token::Op(OpToken::BitNot)),
-                '0'..='9' => return ok_some!(Token::Num(TokenFeed::extract_number(c.1, &mut self.itr))),
+                '0'..='9' => return ok_some!(Token::Num(TokenFeed::extract_number(c.1, &mut self.itr)?)),
                 w if w.is_alphabetic() || '_' == w => {
-                    return ok_some!(Token::Var(TokenFeed::extract_identifer(c.1, &mut self.itr)?));
+                    return ok_some!(Token::Var(TokenFeed::extract_identifer(c.1, &mut self.itr)));
                 }
                 _ => {
                     return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
@@ -421,7 +471,7 @@ impl<'a> TokenFeed<'a> {
 
     // first character must be valid
     // push any other invalid errors to be caught by other parts of the program
-    fn extract_number(c: char, itr: &mut iter::Peekable<iter::Enumerate<str::Chars>>) -> SolverInt {
+    fn extract_number(c: char, itr: &mut iter::Peekable<iter::Enumerate<str::Chars>>) -> Result<SolverInt, SolverError> {
         // probably the best way to do this since rust isn't ASCII
         let mut s = String::with_capacity(18);
         s.push(c);
@@ -440,7 +490,7 @@ impl<'a> TokenFeed<'a> {
                 }
                 '0'..='9' => s.push(itr.next().unwrap().1),
                 _ => {
-                    return SolverInt::from_str_radix(s.as_str(), radix).unwrap();
+                    return Ok(SolverInt::from_str_radix(s.as_str(), radix).unwrap());
                 }
             }
         }
@@ -449,13 +499,25 @@ impl<'a> TokenFeed<'a> {
             16 => extract_on_radix!('0'..='9' | 'a'..='f' | 'A'..='F', s, itr),
             10 => extract_on_radix!('0'..='9', s, itr),
             2 => extract_on_radix!('0'..='1', s, itr),
-            _ => panic!("Unsupported radix"),
+            _ => unreachable!("Unsupported radix"),
         }
 
-        SolverInt::from_str_radix(s.as_str(), radix).unwrap()
+        match SolverInt::from_str_radix(s.as_str(), radix) {
+            Ok(res) => Ok(res),
+            Err(e) => {
+                assert!(e.kind() == &std::num::IntErrorKind::PosOverflow);
+                let loc = if let Some(i) = itr.peek() { i.0 } else { FEED_OFFSET_END };
+
+                Err(SolverError::ParseTooLargeNumError(ErrorLocation {
+                    error: "Provided integer too large",
+                    loc,
+                    hint: None,
+                }))
+            }
+        }
     }
 
-    fn extract_identifer(c: char, itr: &mut iter::Peekable<iter::Enumerate<str::Chars>>) -> Result<Identifier, SolverError> {
+    fn extract_identifer(c: char, itr: &mut iter::Peekable<iter::Enumerate<str::Chars>>) -> Identifier {
         let mut s = String::with_capacity(20);
         s.push(c);
 
@@ -467,7 +529,7 @@ impl<'a> TokenFeed<'a> {
             s.push(itr.next().unwrap().1);
         }
 
-        Ok(Identifier(s))
+        Identifier(s)
     }
 }
 
@@ -503,12 +565,8 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
     let mut num1 = match &cur {
         Token::Num(num) => *num,
         Token::Op(op) => match op {
-            OpToken::Minus => -do_expression(OpToken::PRECEDENCE_NEG_TOK, feed, vars)?,
-            OpToken::BitNot => {
-                let res = do_expression(OpToken::BitNot.precedence(), feed, vars)?;
-                println!("res: {}", res);
-                !res
-            }
+            OpToken::Minus => do_expression(OpToken::PRECEDENCE_NEG_TOK, feed, vars)?.twosc(),
+            OpToken::BitNot => !do_expression(OpToken::BitNot.precedence(), feed, vars)?,
             OpToken::Open => {
                 let res = do_expression(OpToken::PRECEDENCE_NO_PREC + 1, feed, vars)?;
                 if let Some(next) = feed.next()? {
@@ -573,12 +631,12 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
         }
 
         match op {
-            OpToken::Plus => num1 += num2,
-            OpToken::Minus => num1 -= num2,
-            OpToken::Mul => num1 *= num2,
-            OpToken::Div => num1 /= num2,
-            OpToken::Mod => num1 %= num2,
-            OpToken::Exp => num1 = num1.pow(u32::try_from(num2)?),
+            OpToken::Plus => num1 = num1.wrapping_add(num2),
+            OpToken::Minus => num1 = num1.wrapping_sub(num2),
+            OpToken::Mul => num1 = num1.wrapping_mul(num2),
+            OpToken::Div => num1 = num1.div(num2),
+            OpToken::Mod => num1 = num1.wrapping_rem(num2),
+            OpToken::Exp => num1 = num1.wrapping_pow(u32::try_from(num2)?),
             OpToken::Equal => {
                 num1 = num2;
                 vars.update(cur.as_var(), num1);
@@ -700,7 +758,7 @@ mod tests {
             match op {
                 OpToken::Equal => call_eq("a = 5", 5, None)?,
                 OpToken::Plus => call_eq("5 + 5", 10, None)?,
-                OpToken::Minus => call_eq("-5 -2", -7, None)?,
+                OpToken::Minus => call_eq("-5 -2", 7.twosc(), None)?,
                 OpToken::Mul => call_eq("12*15", 180, None)?,
                 OpToken::Div => call_eq("12/3", 4, None)?,
                 OpToken::Mod => call_eq("8%5", 3, None)?,
@@ -710,9 +768,21 @@ mod tests {
                 OpToken::BitAnd => call_eq("0xFF & 0xA1", 0xA1, None)?,
                 OpToken::BitOr => call_eq("0b1100 | 0b0011", 0b1111, None)?,
                 OpToken::BitXor => call_eq("0b1100 ^ 0b1010", 0b0110, None)?,
-                OpToken::BitNot => call_eq("~0", -1, None)?,
+                OpToken::BitNot => call_eq("~0", 1.twosc(), None)?,
             }
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_div() -> Result<(), TestError> {
+        // test the 4 cases of signs in division
+
+        call_eq("4/2", 2, None)?;
+        call_eq("-27/7", 3.twosc(), None)?;
+        call_eq("72/-8", 9.twosc(), None)?;
+        call_eq("-729/-9", 81, None)?;
 
         Ok(())
     }
@@ -734,11 +804,11 @@ mod tests {
     #[test]
     fn test_hex_and_bin() -> Result<(), TestError> {
         let inputs = [
-            ("0x55 - 0b1101101", -24),
-            ("0x055 - 0b0000001101101", -24),
-            ("0x16 - 0x0A1", -139),
+            ("0x55 - 0b1101101", 24.twosc()),
+            ("0x055 - 0b0000001101101", 24.twosc()),
+            ("0x16 - 0x0A1", 139.twosc()),
             ("0B101 - 0b010", 3),
-            ("0X1E - 0xFF", -225),
+            ("0X1E - 0xFF", 225.twosc()),
         ];
 
         for input in inputs.iter() {
@@ -754,13 +824,13 @@ mod tests {
             ("(5+2)*2", 14),
             ("(3-1)*10", 20),
             ("(2*3)#2", 36),
-            ("(1-2)*5", -5),
+            ("(1-2)*5", 5.twosc()),
             ("3*(8/2) + 1", 13),
             ("-5 * (-3+1)/2", 5),
             ("((2+1)*4)#2", 144),
             ("36/(1+2)", 12),
             ("5*2 +1", 11),
-            ("5*5 - 1 #10 * 55000 / 100 ", -525),
+            ("5*5 - 1 #10 * 55000 / 100 ", 525.twosc()),
             ("6 + (16 - 4)/(2#2 + 2) - 2", 6),
             ("(4 + 8)/(2 + 1) - (3 - 1) + 2", 4),
             ("-5 # 3 * -4 + 7 - -10", 517),
@@ -837,6 +907,25 @@ mod tests {
         )?;
         assert_eq!(*vars.get(&Identifier(e)).unwrap(), 0b1011);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_wrapping() -> Result<(), TestError> {
+        let inputs = [
+            ("13#10", 137858491849),
+            ("0xFFFFFFFFFFFFFFFF", 0xFFFFFFFFFFFFFFFF),
+            ("0xFFFFFFFFFFFFFFFF + 1", 0),
+            ("(1-2)*5", 5.twosc()),
+            ("0xFFFFFFFFFFFFFFFF + 2", 1),
+            ("~0", !0),
+        ];
+
+        for input in inputs.iter() {
+            call_eq(input.0, input.1, None)?;
+        }
+
+        expect_error!("0xFFFFFFFFFFFFFFFFF", SolverError::ParseTooLargeNumError);
         Ok(())
     }
 }

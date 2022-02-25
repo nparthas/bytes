@@ -427,12 +427,12 @@ mod tests {
 
         formatter.update_fmt("/32x")?;
         assert_eq!(
-            formatter.format(0xFFFF_FFFFisize),
-            FormatResult::Ok(format!("{:#x}", 0xFFFF_FFFFisize))
+            formatter.format(0xFFFF_FFFF),
+            FormatResult::Ok(format!("{:#x}", 0xFFFF_FFFFusize))
         );
 
         assert_eq!(
-            formatter.format(0xFFFF_FFFFisize + 1),
+            formatter.format(0xFFFF_FFFF + 1),
             FormatResult::OverWidth(format!("{:#x}", 0xFFFF_FFFFisize + 1), Bits::from_num(32)?)
         );
 
