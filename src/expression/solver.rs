@@ -6,7 +6,7 @@ use std::mem;
 use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: shift ops >>/<<
+// TODO:: use formater for printing vars
 // TODO:: logical ops
 // TODO:: log_2 + exp + sqrt
 // TODO:: handle 0b66 better
@@ -270,6 +270,8 @@ enum OpToken {
     BitOr,
     BitXor,
     BitNot,
+    BitShiftRight,
+    BitShiftLeft,
 }
 
 impl OpToken {
@@ -281,11 +283,12 @@ impl OpToken {
             OpToken::BitXor => 3,
             OpToken::BitAnd => 4,
             OpToken::Plus | OpToken::Minus => 5,
-            // PRECEDENCE_NEG_TOK goes here (6)
-            OpToken::Mul | OpToken::Div | OpToken::Mod => 7,
-            OpToken::BitNot => 8,
-            OpToken::Exp => 9,
-            OpToken::Open | OpToken::Close => 10,
+            OpToken::BitShiftRight | OpToken::BitShiftLeft => 6,
+            // PRECEDENCE_NEG_TOK goes here (7)
+            OpToken::Mul | OpToken::Div | OpToken::Mod => 8,
+            OpToken::BitNot => 9,
+            OpToken::Exp => 10,
+            OpToken::Open | OpToken::Close => 11,
         }
     }
 
@@ -301,7 +304,9 @@ impl OpToken {
             | OpToken::Exp
             | OpToken::BitAnd
             | OpToken::BitOr
-            | OpToken::BitXor => true,
+            | OpToken::BitXor
+            | OpToken::BitShiftRight
+            | OpToken::BitShiftLeft => true,
         }
     }
 
@@ -326,13 +331,15 @@ impl OpToken {
             | OpToken::BitAnd
             | OpToken::BitOr
             | OpToken::BitXor
-            | OpToken::BitNot => false,
+            | OpToken::BitNot
+            | OpToken::BitShiftRight
+            | OpToken::BitShiftLeft => false,
         }
     }
 
     const PRECEDENCE_NO_PREC: i32 = 0;
-    const PRECEDENCE_NEG_TOK: i32 = 6;
-    const OPS: [OpToken; 13] = [
+    const PRECEDENCE_NEG_TOK: i32 = 7;
+    const OPS: [OpToken; 15] = [
         OpToken::Equal,
         OpToken::Plus,
         OpToken::Minus,
@@ -346,6 +353,8 @@ impl OpToken {
         OpToken::BitOr,
         OpToken::BitXor,
         OpToken::BitNot,
+        OpToken::BitShiftRight,
+        OpToken::BitShiftLeft,
     ];
 }
 
@@ -366,6 +375,8 @@ impl fmt::Display for OpToken {
                 OpToken::BitOr => write!(f, "{:18}|", "Bitwise Or:"),
                 OpToken::BitXor => write!(f, "{:18}^", "Bitwise Xor:"),
                 OpToken::BitNot => write!(f, "{:18}~", "Bitwise Not:"),
+                OpToken::BitShiftRight => write!(f, "{:18}>>", "Bit shift right:"),
+                OpToken::BitShiftLeft => write!(f, "{:18}<<", "Bit shift left:"),
             }
         } else {
             match &self {
@@ -382,6 +393,8 @@ impl fmt::Display for OpToken {
                 OpToken::BitOr => write!(f, "|"),
                 OpToken::BitXor => write!(f, "^"),
                 OpToken::BitNot => write!(f, "~"),
+                OpToken::BitShiftRight => write!(f, ">>"),
+                OpToken::BitShiftLeft => write!(f, "<<"),
             }
         }
     }
@@ -433,6 +446,14 @@ impl<'a> TokenFeed<'a> {
                 '|' => return ok_some!(Token::Op(OpToken::BitOr)),
                 '^' => return ok_some!(Token::Op(OpToken::BitXor)),
                 '~' => return ok_some!(Token::Op(OpToken::BitNot)),
+                '>' => {
+                    TokenFeed::match_multichar_tok(">>", c.0, c.1, &mut self.itr)?;
+                    return ok_some!(Token::Op(OpToken::BitShiftRight));
+                }
+                '<' => {
+                    TokenFeed::match_multichar_tok("<<", c.0, c.1, &mut self.itr)?;
+                    return ok_some!(Token::Op(OpToken::BitShiftLeft));
+                }
                 '0'..='9' => return ok_some!(Token::Num(TokenFeed::extract_number(c.1, &mut self.itr)?)),
                 w if w.is_alphabetic() || '_' == w => {
                     return ok_some!(Token::Var(TokenFeed::extract_identifer(c.1, &mut self.itr)));
@@ -530,6 +551,54 @@ impl<'a> TokenFeed<'a> {
         }
 
         Identifier(s)
+    }
+
+    // expects the full token match in tok, even if c is already matched to tok[0]
+    fn match_multichar_tok(
+        tok: &'static str,
+        cur_pos: usize,
+        c: char,
+        itr: &mut iter::Peekable<iter::Enumerate<str::Chars>>,
+    ) -> Result<(), SolverError> {
+        let mut tok_itr = tok.chars();
+        let mut pos = cur_pos;
+
+        // sanity in case this isn't called in TokenFeed::next
+        match tok_itr.next() {
+            Some(t) => {
+                if t != c {
+                    return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
+                        "Invalid char in expression",
+                        pos,
+                        Some(c.to_string()),
+                    )));
+                }
+            }
+            None => {
+                return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
+                    "Invalid token, did you mean:",
+                    pos,
+                    Some(tok.to_string()),
+                )));
+            }
+        }
+
+        pos += 1;
+
+        for t in tok_itr {
+            if itr.peek().is_none() || t != itr.peek().unwrap().1 {
+                return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
+                    "Invalid token, did you mean:",
+                    pos,
+                    Some(tok.to_string()),
+                )));
+            }
+
+            itr.next();
+            pos += 1;
+        }
+
+        Ok(())
     }
 }
 
@@ -645,6 +714,8 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
             OpToken::BitAnd => num1 &= num2,
             OpToken::BitOr => num1 |= num2,
             OpToken::BitXor => num1 ^= num2,
+            OpToken::BitShiftRight => num1 >>= num2,
+            OpToken::BitShiftLeft => num1 <<= num2,
             _ => {
                 unreachable!("missed handling on op... save the equation and write a test");
             }
@@ -769,6 +840,8 @@ mod tests {
                 OpToken::BitOr => call_eq("0b1100 | 0b0011", 0b1111, None)?,
                 OpToken::BitXor => call_eq("0b1100 ^ 0b1010", 0b0110, None)?,
                 OpToken::BitNot => call_eq("~0", 1.twosc(), None)?,
+                OpToken::BitShiftRight => call_eq("0b101010 >> 2", 0b1010, None)?,
+                OpToken::BitShiftLeft => call_eq("0b11 << 8", 0b1100000000, None)?,
             }
         }
 
@@ -834,7 +907,7 @@ mod tests {
             ("6 + (16 - 4)/(2#2 + 2) - 2", 6),
             ("(4 + 8)/(2 + 1) - (3 - 1) + 2", 4),
             ("-5 # 3 * -4 + 7 - -10", 517),
-            ("0b1001 | 0b0110 ^  0b0100 & ~0b1001", 0b1011),
+            ("0b1001 | 0b0110 ^  0b0010 << 1 & ~0b1001", 0b1011),
         ];
 
         for input in inputs.iter() {
