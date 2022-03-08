@@ -7,6 +7,7 @@ use std::num::TryFromIntError;
 use std::str;
 
 // TODO:: use formater for printing vars
+// TODO:: handle 1 =2
 // TODO:: logical ops
 // TODO:: log_2 + exp + sqrt
 // TODO:: handle 0b66 better
@@ -183,6 +184,23 @@ impl Variables {
 
     pub fn result_identifier(&self) -> Identifier {
         self.res_ident.clone()
+    }
+
+    pub fn print<F>(&self, f: F)
+    where
+        F: Fn(SolverInt) -> String,
+    {
+        if let Some(&v) = self.vars.get(&self.result_identifier()) {
+            println!("{:>6} = {}", self.result_identifier(), f(v));
+        }
+
+        for (k, v) in &self.vars {
+            if *k == self.result_identifier() {
+                continue;
+            }
+
+            println!("{:>6} = {}", k, f(*v));
+        }
     }
 }
 

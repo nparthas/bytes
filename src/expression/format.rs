@@ -219,7 +219,7 @@ impl Formatter {
             PrintStyle::Decimal => FormatResult::Ok(format!("{}", value)),
             PrintStyle::Binary(bits) => {
                 let num_bits = bits.to_num();
-                let res = format!("{:#width$b}", value, width = num_bits + 2);
+                let res = format!("{:#0width$b}", value, width = num_bits + 2);
                 if Bits::Free != *bits && mem::size_of::<FormatInt>() * 8 != num_bits && value >> num_bits != 0 {
                     return FormatResult::OverWidth(res, *bits);
                 }
@@ -229,7 +229,6 @@ impl Formatter {
             PrintStyle::Hex(bits) => {
                 let num_bits = bits.to_num();
                 let res = format!("{:#0width$x}", value, width = num_bits / 4 + 2);
-                println!("value:{} bits:{}", value, num_bits);
                 if Bits::Free != *bits && mem::size_of::<FormatInt>() * 8 != num_bits && value >> num_bits != 0 {
                     return FormatResult::OverWidth(res, *bits);
                 }

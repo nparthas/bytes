@@ -1,4 +1,3 @@
-use log::info;
 use rustyline::error::ReadlineError;
 use rustyline::{CompletionType, Config, Editor};
 use std::{env, fmt};
@@ -45,10 +44,35 @@ fn build_prompt() -> Editor<()> {
     Editor::with_config(config)
 }
 
+#[cfg(debug_assertions)]
+fn print_result(res: expression::format::FormatResult, time: std::time::Duration) {
+    match res {
+        expression::FormatResult::Ok(num) => {
+            println!("{}          [{:?}]", num, time);
+        }
+        expression::FormatResult::OverWidth(num, width) => {
+            println!("Warning: result wider than {}-bit", width);
+            println!("{}          [{:?}]", num, time);
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn print_result(res: expression::format::FormatResult) {
+    match res {
+        expression::FormatResult::Ok(num) => {
+            println!("{}", num);
+        }
+        expression::FormatResult::OverWidth(num, width) => {
+            println!("Warning: result wider than {}-bit", width);
+            println!("{}", num);
+        }
+    }
+}
+
 pub fn main_loop() -> Result<(), ReplError> {
     let version_info: String = format!("{} {}", get_program_name(), env!("CARGO_PKG_VERSION"));
 
-    info!("{} cli start", version_info);
     println!("{} cli:", version_info);
 
     let mut repl = build_prompt();
@@ -70,7 +94,21 @@ pub fn main_loop() -> Result<(), ReplError> {
                 if line.starts_with(META_PREFIX) {
                     match tokenize_meta(line) {
                         MetaToken::Exit => break,
-                        MetaToken::Vars => println!("{}", vars),
+                        MetaToken::Vars => {
+                            let f = |var| match formatter.format(var) {
+                                expression::format::FormatResult::Ok(mut res) => {
+                                    if &expression::format::PrintStyle::Pretty == formatter.get_fmt() {
+                                        res = format!("\n{}\n", res);
+                                    }
+                                    res
+                                }
+                                expression::format::FormatResult::OverWidth(res, width) => {
+                                    format!("{:<18}  [wider than {}-bit]", res, width)
+                                }
+                            };
+
+                            vars.print(f);
+                        }
                         MetaToken::Format => match formatter.update_fmt(&line[1..]) {
                             Ok(()) => {
                                 println!("Set format: {}", formatter.get_fmt());
@@ -98,18 +136,19 @@ pub fn main_loop() -> Result<(), ReplError> {
                         }
                     }
                 } else {
+                    #[cfg(debug_assertions)]
                     let s = std::time::Instant::now();
                     let expr = expression::solve(line, Some(&mut vars));
+                    #[cfg(debug_assertions)]
                     let d = s.elapsed();
 
                     match expr {
-                        Ok(res) => match formatter.format(res) {
-                            expression::FormatResult::Ok(num) => println!("{}          [{:?}]", num, d),
-                            expression::FormatResult::OverWidth(num, width) => {
-                                println!("Warning: result wider than {}-bit", width);
-                                println!("{}          [{:?}]", num, d);
-                            }
-                        },
+                        Ok(res) => {
+                            #[cfg(debug_assertions)]
+                            print_result(formatter.format(res), d);
+                            #[cfg(not(debug_assertions))]
+                            print_result(formatter.format(res));
+                        }
                         Err(err) => match err {
                             expression::SolverError::ParseUnsignedPowError(_) | expression::SolverError::NotImplementedError => {
                                 println!("{}", err)
