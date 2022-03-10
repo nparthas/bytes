@@ -6,7 +6,6 @@ use std::mem;
 use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: use formater for printing vars
 // TODO:: handle 1 =2
 // TODO:: logical ops
 // TODO:: log_2 + exp + sqrt
@@ -684,7 +683,7 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
                 return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
                     "Unexpected token",
                     match feed.cur_col() {
-                        Some(i) => i - FEED_OFFSET_ON,
+                        Some(i) => i.saturating_sub(FEED_OFFSET_ON),
                         None => usize::MAX,
                     },
                     None,
@@ -713,7 +712,7 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
             return Err(SolverError::UnsetVariableError(ErrorLocation::new(
                 "= must immediately follow an unset variable:",
                 cur_col.expect("We should be able to peek a token here") - next.to_string().len(),
-                Some(cur.as_var().to_string()),
+                Some(cur.to_string()),
             )));
         }
 
@@ -721,13 +720,22 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
             OpToken::Plus => num1 = num1.wrapping_add(num2),
             OpToken::Minus => num1 = num1.wrapping_sub(num2),
             OpToken::Mul => num1 = num1.wrapping_mul(num2),
-            OpToken::Div => num1 = num1.div(num2),
+            OpToken::Div => num1 = num1.div(num2), // intentional
             OpToken::Mod => num1 = num1.wrapping_rem(num2),
             OpToken::Exp => num1 = num1.wrapping_pow(u32::try_from(num2)?),
             OpToken::Equal => {
-                num1 = num2;
-                vars.update(cur.as_var(), num1);
-                unset_ident = false;
+                // check that cur/num1 is actually a variable
+                if let Token::Var(_) = cur {
+                    num1 = num2;
+                    vars.update(cur.as_var(), num1);
+                    unset_ident = false;
+                } else {
+                    return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
+                        "cannot assign to a literal:",
+                        cur_col.expect("We should be able to peek a token here") - next.to_string().len(),
+                        Some(cur.to_string()),
+                    )));
+                }
             }
             OpToken::BitAnd => num1 &= num2,
             OpToken::BitOr => num1 |= num2,
@@ -950,6 +958,8 @@ mod tests {
         expect_error!("6+1)", SolverError::InvalidExpressionError);
         expect_error!("15 + a", SolverError::UnsetVariableError);
         expect_error!("a", SolverError::UnsetVariableError);
+        expect_error!("1 = 2", SolverError::InvalidExpressionError);
+        expect_error!("* = 1", SolverError::InvalidExpressionError);
 
         Ok(())
     }
