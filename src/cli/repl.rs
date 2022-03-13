@@ -6,7 +6,7 @@ use crate::expression;
 use crate::expression::solver::IsSigned;
 
 const META_PREFIX: char = '.';
-const PROMPT: &str = "# ";
+const PROMPT: &str = "(bytes) ";
 
 #[derive(Debug)]
 pub enum ReplError {
