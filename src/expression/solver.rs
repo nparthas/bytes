@@ -665,7 +665,7 @@ impl<'a> TokenFeed<'a> {
         s.push(c);
 
         while let Some(c) = itr.peek() {
-            if c.1.is_whitespace() || !c.1.is_alphabetic() {
+            if c.1.is_whitespace() || (!c.1.is_alphabetic() && '_' != c.1) {
                 break;
             }
 
@@ -1116,7 +1116,7 @@ mod tests {
         let mut vars = Variables::new();
         let res_ident = vars.result_identifier();
 
-        let a = "a".to_string();
+        let a = "a_a".to_string();
         let b = "b".to_string();
         let c = "c".to_string();
         let d = "d".to_string();
