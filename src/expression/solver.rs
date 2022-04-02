@@ -6,7 +6,6 @@ use std::mem;
 use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: ternary operator
 // TODO:: log_2
 // TODO:: .help  + print meta commands on incorrect command
 
@@ -296,12 +295,14 @@ enum OpToken {
     LesserEq,
     Equal,
     NotEqual,
+    TernaryQuestion,
+    TernaryColon,
 }
 
 impl OpToken {
     const PRECEDENCE_NO_PREC: i32 = 0;
-    const PRECEDENCE_NEG_TOK: i32 = 10;
-    const OPS: [OpToken; 24] = [
+    const PRECEDENCE_NEG_TOK: i32 = 13;
+    const OPS: [OpToken; 26] = [
         OpToken::Assignment,
         OpToken::Plus,
         OpToken::Minus,
@@ -326,27 +327,31 @@ impl OpToken {
         OpToken::LesserEq,
         OpToken::Equal,
         OpToken::NotEqual,
+        OpToken::TernaryColon,
+        OpToken::TernaryQuestion,
     ];
 
     fn precedence(&self) -> i32 {
         match &self {
             // PRECEDENCE_NO_PREC goes here (0)
             OpToken::Assignment => 1,
-            OpToken::LogicalOr => 2,
-            OpToken::LogicalAnd => 3,
-            OpToken::BitOr => 4,
-            OpToken::BitXor => 5,
-            OpToken::BitAnd => 6,
-            OpToken::Equal | OpToken::NotEqual => 7,
-            OpToken::Greater | OpToken::GreaterEq | OpToken::Lesser | OpToken::LesserEq => 8,
-            OpToken::BitShiftRight | OpToken::BitShiftLeft => 7,
-            OpToken::Plus | OpToken::Minus => 9,
-            // PRECEDENCE_NEG_TOK goes here (10)
-            OpToken::Mul | OpToken::Div | OpToken::Mod => 11,
-            OpToken::BitNot => 12,
-            OpToken::LogicalNot => 13,
-            OpToken::Exp => 14,
-            OpToken::Open | OpToken::Close => 14,
+            OpToken::TernaryColon => 2,
+            OpToken::TernaryQuestion => 3,
+            OpToken::LogicalOr => 4,
+            OpToken::LogicalAnd => 5,
+            OpToken::BitOr => 6,
+            OpToken::BitXor => 7,
+            OpToken::BitAnd => 8,
+            OpToken::Equal | OpToken::NotEqual => 9,
+            OpToken::Greater | OpToken::GreaterEq | OpToken::Lesser | OpToken::LesserEq => 10,
+            OpToken::BitShiftRight | OpToken::BitShiftLeft => 11,
+            OpToken::Plus | OpToken::Minus => 12,
+            // PRECEDENCE_NEG_TOK goes here (13)
+            OpToken::Mul | OpToken::Div | OpToken::Mod => 14,
+            OpToken::BitNot => 15,
+            OpToken::LogicalNot => 16,
+            OpToken::Exp => 17,
+            OpToken::Open | OpToken::Close => 18,
         }
     }
 
@@ -372,7 +377,9 @@ impl OpToken {
             | OpToken::Lesser
             | OpToken::LesserEq
             | OpToken::Equal
-            | OpToken::NotEqual => true,
+            | OpToken::NotEqual
+            | OpToken::TernaryColon
+            | OpToken::TernaryQuestion => true,
         }
     }
 
@@ -408,7 +415,9 @@ impl OpToken {
             | OpToken::Lesser
             | OpToken::LesserEq
             | OpToken::Equal
-            | OpToken::NotEqual => false,
+            | OpToken::NotEqual
+            | OpToken::TernaryColon
+            | OpToken::TernaryQuestion => false,
         }
     }
 }
@@ -441,6 +450,8 @@ impl fmt::Display for OpToken {
                 OpToken::LesserEq => write!(f, "{:18}<=", "Lesser Eq:"),
                 OpToken::Equal => write!(f, "{:18}==", "Equal:"),
                 OpToken::NotEqual => write!(f, "{:18}!=", "Not Equal:"),
+                OpToken::TernaryQuestion => write!(f, "{:18}()?", "Ternary Condition:"),
+                OpToken::TernaryColon => write!(f, "{:18}:", "Ternary Options:"),
             }
         } else {
             match &self {
@@ -468,6 +479,8 @@ impl fmt::Display for OpToken {
                 OpToken::LesserEq => write!(f, "<="),
                 OpToken::Equal => write!(f, "=="),
                 OpToken::NotEqual => write!(f, "!="),
+                OpToken::TernaryQuestion => write!(f, "()?"),
+                OpToken::TernaryColon => write!(f, ":"),
             }
         }
     }
@@ -479,6 +492,7 @@ pub fn print_ops() {
     }
 }
 
+#[derive(Debug)]
 struct TokenFeed<'a> {
     _src: String,
     _peek: Option<Result<Option<Token>, SolverError>>,
@@ -564,6 +578,12 @@ impl<'a> TokenFeed<'a> {
                     }
 
                     return ok_some!(Token::Op(OpToken::Lesser));
+                }
+                '?' => {
+                    return ok_some!(Token::Op(OpToken::TernaryQuestion));
+                }
+                ':' => {
+                    return ok_some!(Token::Op(OpToken::TernaryColon));
                 }
                 '0'..='9' => return ok_some!(Token::Num(TokenFeed::extract_number(c.1, &mut self.itr)?)),
                 w if w.is_alphabetic() || '_' == w => {
@@ -766,7 +786,7 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
                 }
             }
             OpToken::Open => {
-                let res = do_expression(OpToken::PRECEDENCE_NO_PREC + 1, feed, vars)?;
+                let mut res = do_expression(OpToken::PRECEDENCE_NO_PREC + 1, feed, vars)?;
                 if let Some(next) = feed.next()? {
                     // we need a closing token here
                     match next {
@@ -781,6 +801,25 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
                             )))
                         }
                     }
+                    // this is on the only place we can start a ternary expression
+                    if let Ok(Some(Token::Op(OpToken::TernaryQuestion))) = feed.peek() {
+                        feed.next().unwrap();
+                        let n1 = do_expression(OpToken::TernaryColon.precedence() + 1, feed, vars)?;
+                        if let Some(Token::Op(OpToken::TernaryColon)) = feed.next()? {
+                            let n2 = do_expression(OpToken::TernaryColon.precedence() + 1, feed, vars)?;
+                            if res != 0 {
+                                res = n1
+                            } else {
+                                res = n2
+                            }
+                        } else {
+                            return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
+                                "Expected : after ?",
+                                FEED_OFFSET_END,
+                                Some(":".to_string()),
+                            )));
+                        }
+                    }
                 } else {
                     return Err(SolverError::UnbalancedBracketError(ErrorLocation::new(
                         "Expected a closing bracket",
@@ -791,14 +830,14 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
 
                 res
             }
-            _ => {
+            op => {
                 return Err(SolverError::InvalidExpressionError(ErrorLocation::new(
                     "Unexpected token",
                     match feed.cur_col() {
                         Some(i) => i.saturating_sub(FEED_OFFSET_ON),
                         None => usize::MAX,
                     },
-                    None,
+                    Some(op.to_string()),
                 )));
             }
         },
@@ -864,7 +903,10 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
             OpToken::NotEqual => num1 = if num1 != num2 { 1 } else { 0 },
 
             _ => {
-                unreachable!("missed handling on op... save the equation and write a test");
+                unreachable!(format!(
+                    "missed handling on op [`{}`]... save the equation and write a test",
+                    op
+                ));
             }
         }
     }
@@ -998,6 +1040,8 @@ mod tests {
                 OpToken::LesserEq => call_eq("2 <= 2", 1, None)?,
                 OpToken::Equal => call_eq("0b1111 == 0xf", 1, None)?,
                 OpToken::NotEqual => call_eq("1 != !1", 1, None)?,
+                OpToken::TernaryColon => call_eq("(15)? 1 : 2", 1, None)?,
+                OpToken::TernaryQuestion => call_eq("(5)? (0)? 1 : 2 : (3)? 4 : 5", 2, None)?,
             }
         }
 
@@ -1093,6 +1137,7 @@ mod tests {
         expect_error!("* = 1", SolverError::InvalidExpressionError);
         expect_error!("0x + 10", SolverError::InvalidExpressionError);
         expect_error!("0b", SolverError::InvalidExpressionError);
+        expect_error!("(1)? a = 2 : 3", SolverError::UnsetVariableError);
 
         Ok(())
     }
