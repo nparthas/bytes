@@ -6,7 +6,6 @@ use std::mem;
 use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: log_2
 // TODO:: .help  + print meta commands on incorrect command
 
 pub type SolverInt = usize;
@@ -29,6 +28,7 @@ trait TwosC {
     type Output;
     fn twosc(self) -> Self::Output;
     fn div(self, other: Self::Output) -> Self::Output;
+    fn log2(self) -> Self::Output;
 }
 
 impl TwosC for SolverInt {
@@ -61,6 +61,14 @@ impl TwosC for SolverInt {
         }
 
         res
+    }
+
+    fn log2(self) -> Self::Output {
+        if 0 == self {
+            return 0;
+        }
+
+        Self::Output::try_from(Self::BITS).unwrap() - Self::Output::try_from(self.leading_zeros()).unwrap() - 1
     }
 }
 
@@ -297,12 +305,13 @@ enum OpToken {
     NotEqual,
     TernaryQuestion,
     TernaryColon,
+    Function,
 }
 
 impl OpToken {
     const PRECEDENCE_NO_PREC: i32 = 0;
     const PRECEDENCE_NEG_TOK: i32 = 13;
-    const OPS: [OpToken; 26] = [
+    const OPS: [OpToken; 27] = [
         OpToken::Assignment,
         OpToken::Plus,
         OpToken::Minus,
@@ -329,6 +338,7 @@ impl OpToken {
         OpToken::NotEqual,
         OpToken::TernaryColon,
         OpToken::TernaryQuestion,
+        OpToken::Function, // we only have log2 for now, but we can expand the parser if there are more options, will need a `,` token
     ];
 
     fn precedence(&self) -> i32 {
@@ -352,12 +362,13 @@ impl OpToken {
             OpToken::LogicalNot => 16,
             OpToken::Exp => 17,
             OpToken::Open | OpToken::Close => 18,
+            OpToken::Function => 19,
         }
     }
 
     fn is_binary(&self) -> bool {
         match &self {
-            OpToken::Open | OpToken::Close | OpToken::BitNot | OpToken::LogicalNot => false,
+            OpToken::Open | OpToken::Close | OpToken::BitNot | OpToken::LogicalNot | OpToken::Function => false,
             OpToken::Assignment
             | OpToken::Plus
             | OpToken::Minus
@@ -417,7 +428,8 @@ impl OpToken {
             | OpToken::Equal
             | OpToken::NotEqual
             | OpToken::TernaryColon
-            | OpToken::TernaryQuestion => false,
+            | OpToken::TernaryQuestion
+            | OpToken::Function => false,
         }
     }
 }
@@ -452,6 +464,7 @@ impl fmt::Display for OpToken {
                 OpToken::NotEqual => write!(f, "{:18}!=", "Not Equal:"),
                 OpToken::TernaryQuestion => write!(f, "{:18}()?", "Ternary Condition:"),
                 OpToken::TernaryColon => write!(f, "{:18}:", "Ternary Options:"),
+                OpToken::Function => write!(f, "{:18}$func(...)", "Function:"),
             }
         } else {
             match &self {
@@ -481,6 +494,7 @@ impl fmt::Display for OpToken {
                 OpToken::NotEqual => write!(f, "!="),
                 OpToken::TernaryQuestion => write!(f, "()?"),
                 OpToken::TernaryColon => write!(f, ":"),
+                OpToken::Function => write!(f, "$func(...)"),
             }
         }
     }
@@ -587,6 +601,10 @@ impl<'a> TokenFeed<'a> {
                 }
                 '0'..='9' => return ok_some!(Token::Num(TokenFeed::extract_number(c.1, &mut self.itr)?)),
                 w if w.is_alphabetic() || '_' == w => {
+                    if let Ok(()) = TokenFeed::match_multichar_tok("log2", c.0, c.1, &mut self.itr) {
+                        return ok_some!(Token::Op(OpToken::Function));
+                    }
+
                     return ok_some!(Token::Var(TokenFeed::extract_identifer(c.1, &mut self.itr)));
                 }
                 _ => {
@@ -785,7 +803,12 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
                     1
                 }
             }
-            OpToken::Open => {
+            OpToken::Open | OpToken::Function => {
+                // if we have a function just skip that token for now
+                if let OpToken::Function = op {
+                    feed.next()?;
+                }
+
                 let mut res = do_expression(OpToken::PRECEDENCE_NO_PREC + 1, feed, vars)?;
                 if let Some(next) = feed.next()? {
                     // we need a closing token here
@@ -826,6 +849,10 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
                         FEED_OFFSET_END,
                         Some(")".to_string()),
                     )));
+                }
+
+                if let OpToken::Function = op {
+                    res = TwosC::log2(res);
                 }
 
                 res
@@ -1042,6 +1069,7 @@ mod tests {
                 OpToken::NotEqual => call_eq("1 != !1", 1, None)?,
                 OpToken::TernaryColon => call_eq("(15)? 1 : 2", 1, None)?,
                 OpToken::TernaryQuestion => call_eq("(5)? (0)? 1 : 2 : (3)? 4 : 5", 2, None)?,
+                OpToken::Function => call_eq("log2(16)", 4, None)?,
             }
         }
 
