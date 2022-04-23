@@ -2,4 +2,4 @@
 
 .vscode/
 
-server.log
+.DS_Store

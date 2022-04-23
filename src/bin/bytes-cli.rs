@@ -1,4 +1,4 @@
-use byte_server::cli;
+use bytes_cli::cli;
 
 fn main() {
     if let Err(e) = cli::main_loop() {
