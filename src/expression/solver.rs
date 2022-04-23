@@ -336,8 +336,8 @@ impl OpToken {
         OpToken::LesserEq,
         OpToken::Equal,
         OpToken::NotEqual,
-        OpToken::TernaryColon,
         OpToken::TernaryQuestion,
+        OpToken::TernaryColon,
         OpToken::Function, // we only have log2 for now, but we can expand the parser if there are more options, will need a `,` token
     ];
 
@@ -345,8 +345,8 @@ impl OpToken {
         match &self {
             // PRECEDENCE_NO_PREC goes here (0)
             OpToken::Assignment => 1,
-            OpToken::TernaryColon => 2,
-            OpToken::TernaryQuestion => 3,
+            OpToken::TernaryQuestion => 2,
+            OpToken::TernaryColon => 3,
             OpToken::LogicalOr => 4,
             OpToken::LogicalAnd => 5,
             OpToken::BitOr => 6,
@@ -389,8 +389,8 @@ impl OpToken {
             | OpToken::LesserEq
             | OpToken::Equal
             | OpToken::NotEqual
-            | OpToken::TernaryColon
-            | OpToken::TernaryQuestion => true,
+            | OpToken::TernaryQuestion
+            | OpToken::TernaryColon => true,
         }
     }
 
@@ -427,8 +427,8 @@ impl OpToken {
             | OpToken::LesserEq
             | OpToken::Equal
             | OpToken::NotEqual
-            | OpToken::TernaryColon
             | OpToken::TernaryQuestion
+            | OpToken::TernaryColon
             | OpToken::Function => false,
         }
     }
@@ -438,33 +438,33 @@ impl fmt::Display for OpToken {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if f.alternate() {
             match &self {
-                OpToken::Assignment => write!(f, "{:18}=", "Assignment:"),
-                OpToken::Exp => write!(f, "{:18}#", "Exponent:"),
-                OpToken::Plus => write!(f, "{:18}+", "Plus:"),
-                OpToken::Minus => write!(f, "{:18}-", "Subtract:"),
-                OpToken::Mul => write!(f, "{:18}*", "Multiply:"),
-                OpToken::Div => write!(f, "{:18}/", "(Integer) Divide:"),
-                OpToken::Mod => write!(f, "{:18}%", "Modulo:"),
-                OpToken::Open => write!(f, "{:18}(", "Open Bracket:"),
-                OpToken::Close => write!(f, "{:18})", "Close Bracket:"),
-                OpToken::BitAnd => write!(f, "{:18}&", "Bitwise And:"),
-                OpToken::BitOr => write!(f, "{:18}|", "Bitwise Or:"),
-                OpToken::BitXor => write!(f, "{:18}^", "Bitwise Xor:"),
-                OpToken::BitNot => write!(f, "{:18}~", "Bitwise Not:"),
-                OpToken::BitShiftRight => write!(f, "{:18}>>", "Bit Shift Right:"),
-                OpToken::BitShiftLeft => write!(f, "{:18}<<", "Bit Shift Left:"),
-                OpToken::LogicalAnd => write!(f, "{:18}&&", "Logical And:"),
-                OpToken::LogicalOr => write!(f, "{:18}||", "Logical Or:"),
-                OpToken::LogicalNot => write!(f, "{:18}!", "Logical Not:"),
-                OpToken::Greater => write!(f, "{:18}>", "Greater:"),
-                OpToken::GreaterEq => write!(f, "{:18}>=", "Greater Eq:"),
-                OpToken::Lesser => write!(f, "{:18}<", "Lesser:"),
-                OpToken::LesserEq => write!(f, "{:18}<=", "Lesser Eq:"),
-                OpToken::Equal => write!(f, "{:18}==", "Equal:"),
-                OpToken::NotEqual => write!(f, "{:18}!=", "Not Equal:"),
-                OpToken::TernaryQuestion => write!(f, "{:18}()?", "Ternary Condition:"),
-                OpToken::TernaryColon => write!(f, "{:18}:", "Ternary Options:"),
-                OpToken::Function => write!(f, "{:18}$func(...)", "Function:"),
+                OpToken::Assignment => write!(f, "{:20}=", "Assignment:"),
+                OpToken::Exp => write!(f, "{:20}#", "Exponent:"),
+                OpToken::Plus => write!(f, "{:20}+", "Plus:"),
+                OpToken::Minus => write!(f, "{:20}-", "Subtract:"),
+                OpToken::Mul => write!(f, "{:20}*", "Multiply:"),
+                OpToken::Div => write!(f, "{:20}/", "(Integer) Divide:"),
+                OpToken::Mod => write!(f, "{:20}%", "Modulo:"),
+                OpToken::Open => write!(f, "{:20}(", "Open Bracket:"),
+                OpToken::Close => write!(f, "{:20})", "Close Bracket:"),
+                OpToken::BitAnd => write!(f, "{:20}&", "Bitwise And:"),
+                OpToken::BitOr => write!(f, "{:20}|", "Bitwise Or:"),
+                OpToken::BitXor => write!(f, "{:20}^", "Bitwise Xor:"),
+                OpToken::BitNot => write!(f, "{:20}~", "Bitwise Not:"),
+                OpToken::BitShiftRight => write!(f, "{:20}>>", "Bit Shift Right:"),
+                OpToken::BitShiftLeft => write!(f, "{:20}<<", "Bit Shift Left:"),
+                OpToken::LogicalAnd => write!(f, "{:20}&&", "Logical And:"),
+                OpToken::LogicalOr => write!(f, "{:20}||", "Logical Or:"),
+                OpToken::LogicalNot => write!(f, "{:20}!", "Logical Not:"),
+                OpToken::Greater => write!(f, "{:20}>", "Greater:"),
+                OpToken::GreaterEq => write!(f, "{:20}>=", "Greater Eq:"),
+                OpToken::Lesser => write!(f, "{:20}<", "Lesser:"),
+                OpToken::LesserEq => write!(f, "{:20}<=", "Lesser Eq:"),
+                OpToken::Equal => write!(f, "{:20}==", "Equal:"),
+                OpToken::NotEqual => write!(f, "{:20}!=", "Not Equal:"),
+                OpToken::TernaryQuestion => write!(f, "{:20}()?", "Ternary Condition:"),
+                OpToken::TernaryColon => write!(f, "{:20}:", "Ternary Options:"),
+                OpToken::Function => write!(f, "{:20}$func(...)", "Function (log2):"),
             }
         } else {
             match &self {
@@ -1067,8 +1067,8 @@ mod tests {
                 OpToken::LesserEq => call_eq("2 <= 2", 1, None)?,
                 OpToken::Equal => call_eq("0b1111 == 0xf", 1, None)?,
                 OpToken::NotEqual => call_eq("1 != !1", 1, None)?,
-                OpToken::TernaryColon => call_eq("(15)? 1 : 2", 1, None)?,
                 OpToken::TernaryQuestion => call_eq("(5)? (0)? 1 : 2 : (3)? 4 : 5", 2, None)?,
+                OpToken::TernaryColon => call_eq("(15)? 1 : 2", 1, None)?,
                 OpToken::Function => call_eq("log2(16)", 4, None)?,
             }
         }

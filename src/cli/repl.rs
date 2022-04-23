@@ -1,6 +1,6 @@
 use rustyline::error::ReadlineError;
 use rustyline::{CompletionType, Config, Editor};
-use std::{env, fmt};
+use std::fmt;
 
 use crate::expression;
 use crate::expression::solver::IsSigned;
@@ -25,6 +25,7 @@ enum MetaToken {
     Format,
     Ops,
     NumType,
+    Help,
     Unrecognized,
 }
 
@@ -35,6 +36,7 @@ fn tokenize_meta(line: &str) -> MetaToken {
         line if line.starts_with("./") => MetaToken::Format,
         ".ops" => MetaToken::Ops,
         ".num_type" => MetaToken::NumType,
+        ".help" => MetaToken::Help,
         _ => MetaToken::Unrecognized,
     }
 }
@@ -70,10 +72,32 @@ fn print_result(res: expression::format::FormatResult) {
     }
 }
 
-pub fn main_loop() -> Result<(), ReplError> {
-    let version_info: String = format!("{} {}", get_program_name(), env!("CARGO_PKG_VERSION"));
+pub fn print_help(program_name: &str) {
+    println!("\n{}, a program for calculating simple integer expressions.", program_name);
 
-    println!("{} cli:", version_info);
+    println!("Supports mathematical integer ops, binary and logical ops, and simple variables.");
+    println!("For a full list of operators, type \".ops\" (all meta commands start with '.').");
+
+    println!("\nThe backing integer type can be printed with \".num_type\".");
+    println!("Note: the backing type is unsigned, but division works with two's complement.");
+    println!("This means that division behaves like signed arithmetic i.e. -10 / -5 = 2");
+
+    println!("\nVariables can be bound to single word variables using alphanumeric characters and '_'.");
+    println!("The value of the last expression is bound to the variable '_' automatically");
+    println!("To print the current variable state, type \".vars\"");
+
+    println!("\nSupports arbitrary depth evaluation for expressions, like:");
+    println!("\n(bytes) result = (15 << 4)? (2 * 15 - (log2(12)) / 3) % 2 : (12 << 4) < (2 * 4)#5");
+    println!("1");
+    println!("(bytes) _ << 4");
+    println!("16");
+
+    println!("\nTo exit the cli, give EOF (^D) or type \".exit\"");
+    println!();
+}
+
+pub fn main_loop(program_name: &str, program_version: &str) -> Result<(), ReplError> {
+    println!("{} {}:", program_name, program_version);
 
     let mut repl = build_prompt();
     let mut vars = expression::Variables::new();
@@ -130,6 +154,7 @@ pub fn main_loop() -> Result<(), ReplError> {
 
                             println!("{}-bit {} integer", expression::SolverInt::BITS, signed);
                         }
+                        MetaToken::Help => print_help(program_name),
                         MetaToken::Unrecognized => {
                             println!("unrecognized meta command '{}'", line);
                             continue;
@@ -185,16 +210,4 @@ pub fn main_loop() -> Result<(), ReplError> {
     }
 
     Ok(())
-}
-
-fn get_program_name() -> String {
-    String::from(
-        env::current_exe()
-            .unwrap()
-            .file_name()
-            .ok_or("unable to convert file name")
-            .unwrap()
-            .to_str()
-            .unwrap(),
-    )
 }
