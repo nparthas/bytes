@@ -7,6 +7,7 @@ use std::num::TryFromIntError;
 use std::str;
 
 // TODO:: .help  + print meta commands on incorrect command
+// TODO:: clear variables
 
 pub type SolverInt = usize;
 
@@ -188,6 +189,10 @@ impl Variables {
 
     pub fn result_identifier(&self) -> Identifier {
         self.res_ident.clone()
+    }
+
+    pub fn clear(&mut self) {
+        self.vars.clear();
     }
 
     pub fn print<F>(&self, f: F)
@@ -930,10 +935,7 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
             OpToken::NotEqual => num1 = if num1 != num2 { 1 } else { 0 },
 
             _ => {
-                unreachable!(format!(
-                    "missed handling on op [`{}`]... save the equation and write a test",
-                    op
-                ));
+                unreachable!("missed handling on op [`{}`]... save the equation and write a test", op);
             }
         }
     }

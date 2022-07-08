@@ -22,6 +22,7 @@ impl fmt::Display for ReplError {
 enum MetaToken {
     Exit,
     Vars,
+    ClearVars,
     Format,
     Ops,
     NumType,
@@ -33,6 +34,7 @@ fn tokenize_meta(line: &str) -> MetaToken {
     match line {
         ".exit" => MetaToken::Exit,
         ".vars" => MetaToken::Vars,
+        ".clear_vars" => MetaToken::ClearVars,
         line if line.starts_with("./") => MetaToken::Format,
         ".ops" => MetaToken::Ops,
         ".num_type" => MetaToken::NumType,
@@ -133,6 +135,7 @@ pub fn main_loop(program_name: &str, program_version: &str) -> Result<(), ReplEr
 
                             vars.print(f);
                         }
+                        MetaToken::ClearVars => vars.clear(),
                         MetaToken::Format => match formatter.update_fmt(&line[1..]) {
                             Ok(()) => {
                                 println!("Set format: {}", formatter.get_fmt());
