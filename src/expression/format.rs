@@ -82,12 +82,13 @@ impl fmt::Display for Bits {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum PrintStyle {
     Decimal,
     Binary(Bits),
     Hex(Bits),
     Pretty,
+    Logical,
 }
 
 impl fmt::Display for PrintStyle {
@@ -109,6 +110,9 @@ impl fmt::Display for PrintStyle {
             PrintStyle::Pretty => {
                 write!(f, "Pretty")?;
             }
+            PrintStyle::Logical => {
+                write!(f, "Logical")?;
+            }
         }
 
         Ok(())
@@ -116,14 +120,15 @@ impl fmt::Display for PrintStyle {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Formatter {
-    print_style: PrintStyle,
-}
-
-#[derive(Debug, PartialEq)]
 pub enum FormatResult {
     Ok(String),
     OverWidth(String, Bits),
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Formatter {
+    print_style: PrintStyle,
+    last_print_style: PrintStyle, // only used for logical print
 }
 
 impl Formatter {
@@ -139,7 +144,7 @@ impl Formatter {
         (Bits::Two, Bits::Sixteen)
     }
 
-    // must be in the form /\d+[d,b,x] and match up with valid digit combination
+    // must be in the form /\d+[d,b,x,l] and match up with valid digit combination
     pub fn update_fmt(&mut self, fmt_string: &str) -> Result<(), FormatError> {
         let mut itr = fmt_string.chars().peekable();
 
@@ -199,9 +204,18 @@ impl Formatter {
                     return Ok(());
                 }
 
+                Some('l') => {
+                    if PrintStyle::Logical != self.print_style {
+                        self.last_print_style = self.print_style;
+                    }
+
+                    self.print_style = PrintStyle::Logical;
+                    return Ok(());
+                }
+
                 _ => {
                     return Err(FormatError::InvalidFormatString(
-                        "Expected one of [d,b,x,p] format specifiers",
+                        "Expected one of [d,b,x,p,l] format specifiers",
                     ))
                 }
             }
@@ -215,7 +229,12 @@ impl Formatter {
     }
 
     pub fn format(&self, value: SolverInt) -> FormatResult {
-        match &self.print_style {
+        Formatter::do_format(self.print_style, self.last_print_style, value)
+    }
+
+    fn do_format(print_style: PrintStyle, last_print_style: PrintStyle, value: SolverInt) -> FormatResult {
+        assert!(PrintStyle::Logical != last_print_style, "last_print_style cannot be Logical");
+        match &print_style {
             PrintStyle::Decimal => FormatResult::Ok(format!("{}", value)),
             PrintStyle::Binary(bits) => {
                 let num_bits = bits.to_num();
@@ -271,6 +290,11 @@ impl Formatter {
 
                 FormatResult::Ok(res)
             }
+            PrintStyle::Logical => match value {
+                0 => FormatResult::Ok("false".to_string()),
+                1 => FormatResult::Ok("true".to_string()),
+                _ => Formatter::do_format(last_print_style, last_print_style, value),
+            },
         }
     }
 }
@@ -279,6 +303,7 @@ impl Default for Formatter {
     fn default() -> Self {
         Formatter {
             print_style: PrintStyle::Decimal,
+            last_print_style: PrintStyle::Decimal,
         }
     }
 }
