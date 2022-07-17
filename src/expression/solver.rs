@@ -626,7 +626,7 @@ impl<'a> TokenFeed<'a> {
                     if let Ok(()) = TokenFeed::match_multichar_tok("log2", c.0, c.1, &mut self.itr) {
                         return ok_some!(Token::Op(OpToken::Function(Func::Log2)));
                     }
-                    if let Ok(()) = TokenFeed::match_multichar_tok("popcnt2", c.0, c.1, &mut self.itr) {
+                    if let Ok(()) = TokenFeed::match_multichar_tok("popcnt", c.0, c.1, &mut self.itr) {
                         return ok_some!(Token::Op(OpToken::Function(Func::Popcnt)));
                     }
 
@@ -1095,7 +1095,7 @@ mod tests {
                 OpToken::TernaryQuestion => call_eq("(5)? (0)? 1 : 2 : (3)? 4 : 5", 2, None)?,
                 OpToken::TernaryColon => call_eq("(15)? 1 : 2", 1, None)?,
                 OpToken::Function(Func::Log2) => call_eq("log2(16)", 4, None)?,
-                OpToken::Function(Func::Popcnt) => call_eq("popcnt2(15)", 4, None)?,
+                OpToken::Function(Func::Popcnt) => call_eq("popcnt(15)", 4, None)?,
             }
         }
 
