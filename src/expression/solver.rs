@@ -550,7 +550,7 @@ impl<'a> TokenFeed<'a> {
     fn next(&mut self) -> Result<Option<Token>, SolverError> {
         // if we've peeked a value before return it and empty the cache
         if self._peek.is_some() {
-            return mem::replace(&mut self._peek, None).unwrap();
+            return self._peek.take().unwrap();
         }
 
         while let Some(c) = self.itr.next() {

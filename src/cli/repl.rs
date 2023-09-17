@@ -1,6 +1,7 @@
 use rustyline::error::ReadlineError;
 use rustyline::{CompletionType, Config, Editor};
 use std::fmt;
+use std::str::FromStr;
 
 use crate::expression;
 use crate::expression::solver::IsSigned;
@@ -19,7 +20,9 @@ impl fmt::Display for ReplError {
     }
 }
 
+#[derive(Debug)]
 enum MetaToken {
+    Unrecognized,
     Exit,
     Vars,
     ClearVars,
@@ -27,19 +30,91 @@ enum MetaToken {
     Ops,
     NumType,
     Help,
-    Unrecognized,
 }
 
-fn tokenize_meta(line: &str) -> MetaToken {
-    match line {
-        ".exit" => MetaToken::Exit,
-        ".vars" => MetaToken::Vars,
-        ".clear_vars" => MetaToken::ClearVars,
-        line if line.starts_with("./") => MetaToken::Format,
-        ".ops" => MetaToken::Ops,
-        ".num_type" => MetaToken::NumType,
-        ".help" => MetaToken::Help,
-        _ => MetaToken::Unrecognized,
+macro_rules! MetaTokenStr {
+    (MetaToken::Unrecognized) => {
+        "UNRECOGNIZED"
+    };
+    (MetaToken::Exit) => {
+        ".exit"
+    };
+    (MetaToken::Vars) => {
+        ".vars"
+    };
+    (MetaToken::ClearVars) => {
+        ".clear_vars"
+    };
+    (MetaToken::Format) => {
+        "./[d,b,x,p,l]"
+    };
+    (MetaToken::Ops) => {
+        ".ops"
+    };
+    (MetaToken::NumType) => {
+        ".num_type"
+    };
+    (MetaToken::Help) => {
+        ".help"
+    };
+
+    ($x:ty) => {
+        compile_error!(std::concat!(std::stringify!($x), " is not a MetaToken type"))
+    };
+}
+
+impl fmt::Display for MetaToken {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let str = match &self {
+            MetaToken::Unrecognized => MetaTokenStr!(MetaToken::Unrecognized),
+            MetaToken::Exit => MetaTokenStr!(MetaToken::Exit),
+            MetaToken::Vars => MetaTokenStr!(MetaToken::Vars),
+            MetaToken::ClearVars => MetaTokenStr!(MetaToken::ClearVars),
+            MetaToken::Format => MetaTokenStr!(MetaToken::Format),
+            MetaToken::Ops => MetaTokenStr!(MetaToken::Ops),
+            MetaToken::NumType => MetaTokenStr!(MetaToken::NumType),
+            MetaToken::Help => MetaTokenStr!(MetaToken::Help),
+        };
+
+        write!(f, "{}", str)
+    }
+}
+
+#[derive(Debug)]
+struct ParseMetaTokenError;
+
+impl FromStr for MetaToken {
+    type Err = ParseMetaTokenError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let t = match s {
+            MetaTokenStr!(MetaToken::Exit) => MetaToken::Exit,
+            MetaTokenStr!(MetaToken::Vars) => MetaToken::Vars,
+            MetaTokenStr!(MetaToken::ClearVars) => MetaToken::ClearVars,
+            s if s.starts_with("./") => MetaToken::Format,
+            MetaTokenStr!(MetaToken::Ops) => MetaToken::Ops,
+            MetaTokenStr!(MetaToken::NumType) => MetaToken::NumType,
+            MetaTokenStr!(MetaToken::Help) => MetaToken::Help,
+            _ => MetaToken::Unrecognized,
+        };
+        Ok(t)
+    }
+}
+
+impl MetaToken {
+    pub fn print_help() {
+        static META_TOKENS: [MetaToken; 7] = [
+            MetaToken::Exit,
+            MetaToken::Vars,
+            MetaToken::ClearVars,
+            MetaToken::Format,
+            MetaToken::Ops,
+            MetaToken::NumType,
+            MetaToken::Help,
+        ];
+        for i in &META_TOKENS {
+            println!("{:?}", i.to_string());
+        }
     }
 }
 
@@ -94,7 +169,10 @@ pub fn print_help(program_name: &str) {
     println!("(bytes) _ << 4");
     println!("16");
 
-    println!("\nTo exit the cli, give EOF (^D) or type \".exit\"");
+    println!("\nAvailble meta commands:");
+    MetaToken::print_help();
+
+    println!("\nTo exit the cli, give EOF (^D) or type {}", MetaToken::Exit);
     println!();
 }
 
@@ -118,7 +196,7 @@ pub fn main_loop(program_name: &str, program_version: &str) -> Result<(), ReplEr
                 repl.add_history_entry(line);
 
                 if line.starts_with(META_PREFIX) {
-                    match tokenize_meta(line) {
+                    match MetaToken::from_str(line).unwrap() {
                         MetaToken::Exit => break,
                         MetaToken::Vars => {
                             let f = |var| match formatter.format(var) {
