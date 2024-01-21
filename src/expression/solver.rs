@@ -1,78 +1,12 @@
 use std::collections;
 use std::convert::TryFrom;
-use std::convert::TryInto;
 use std::fmt;
 use std::iter;
 use std::mem;
 use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: .help  + print meta commands on incorrect command
-// TODO:: clear variables
-
-pub type SolverInt = usize;
-
-pub trait IsSigned {
-    fn is_signed() -> bool;
-}
-
-impl IsSigned for SolverInt {
-    // in case we change the type in the future actually do a check
-    #[allow(unused_comparisons, clippy::absurd_extreme_comparisons)]
-    fn is_signed() -> bool {
-        SolverInt::MIN < 0
-    }
-}
-
-// unary `-` not supported for unsigned types, use 2's complement identity
-// ~x = -(x+1)
-trait TwosC {
-    type Output;
-    fn twosc(self) -> Self::Output;
-    fn div(self, other: Self::Output) -> Self::Output;
-    fn log2(self) -> Self::Output;
-}
-
-impl TwosC for SolverInt {
-    type Output = Self;
-    fn twosc(self) -> Self::Output {
-        (!self).wrapping_add(1)
-    }
-
-    fn div(self, other: Self::Output) -> Self::Output {
-        // the way the expression parses num1 won't ever be negative
-        // but handle anyway for completeness
-        let mut num1 = self;
-        let mut num2 = other;
-
-        let sign1 = num1 >> (Self::BITS - 1);
-        let sign2 = num2 >> (Self::BITS - 1);
-
-        if 0 != sign1 {
-            num1 = num1.twosc();
-        }
-
-        if 0 != sign2 {
-            num2 = num2.twosc();
-        }
-
-        let mut res = num1 / num2;
-
-        if 0 != sign1 ^ sign2 {
-            res = res.twosc();
-        }
-
-        res
-    }
-
-    fn log2(self) -> Self::Output {
-        if 0 == self {
-            return 0;
-        }
-
-        Self::Output::try_from(Self::BITS).unwrap() - Self::Output::try_from(self.leading_zeros()).unwrap() - 1
-    }
-}
+use crate::expression::solverint::{SolverInt, SolverType};
 
 pub const FEED_OFFSET_END: usize = usize::MAX;
 const FEED_OFFSET_BEHIND: usize = 1;
@@ -171,6 +105,7 @@ impl fmt::Display for SolverError {
 
 #[derive(Debug)]
 pub struct Variables {
+    solver_type: SolverType,
     vars: collections::HashMap<Identifier, SolverInt>,
     res_ident: Identifier,
 }
@@ -190,6 +125,10 @@ impl Variables {
 
     pub fn result_identifier(&self) -> Identifier {
         self.res_ident.clone()
+    }
+
+    pub fn solver_type(&self) -> SolverType {
+        self.solver_type
     }
 
     pub fn clear(&mut self) {
@@ -219,6 +158,7 @@ impl Default for Variables {
         Variables {
             vars: collections::HashMap::new(),
             res_ident: Identifier("_".to_string()),
+            solver_type: Default::default(),
         }
     }
 }
@@ -979,21 +919,15 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
     Ok(num1)
 }
 
-pub fn solve<S: Into<String>>(expr: S, vars: Option<&mut Variables>) -> Result<SolverInt, SolverError> {
+pub fn solve<S: Into<String>>(expr: S, vars: &mut Variables) -> Result<SolverInt, SolverError> {
     let mut tokenfeed = TokenFeed::new(expr.into());
     let mut vars = vars;
 
-    let res = match vars {
-        Some(ref mut variables) => do_expression(OpToken::PRECEDENCE_NO_PREC, &mut tokenfeed, variables),
-        None => do_expression(OpToken::PRECEDENCE_NO_PREC, &mut tokenfeed, &mut Variables::new()),
-    };
+    let res = do_expression(OpToken::PRECEDENCE_NO_PREC, &mut tokenfeed, vars);
 
     if let Ok(num) = res {
         if let Ok(None) = tokenfeed.next() {
-            if let Some(v) = vars {
-                v.update(v.result_identifier(), num);
-            }
-
+            vars.update(vars.result_identifier(), num);
             Ok(num)
         } else {
             Err(SolverError::InvalidExpressionError(ErrorLocation::new(
@@ -1028,7 +962,11 @@ mod tests {
     fn call_eq<S: Into<String>>(expr: S, expected: SolverInt, vars: Option<&mut Variables>) -> Result<(), TestError> {
         let expr = expr.into();
         println!("running [{}]", expr);
-        let actual = solve(&expr, vars);
+        let actual = match vars {
+            Some(ref mut variables) => solve(&expr, variables),
+            None => solve(&expr, &mut Variables::new()),
+        };
+
         match actual {
             Ok(actual) => {
                 if actual == expected {
@@ -1047,7 +985,7 @@ mod tests {
 
     macro_rules! expect_error {
         ($equation:expr, $err:path) => {
-            let res = solve($equation, None);
+            let res = solve($equation, &mut Variables::new());
             if let Err($err(_)) = res {
             } else {
                 return Err(TestError {

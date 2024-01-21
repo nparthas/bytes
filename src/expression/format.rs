@@ -1,7 +1,7 @@
 use std::fmt;
 use std::mem;
 
-use crate::expression::solver::*;
+use crate::expression::SolverInt;
 
 type FormatInt = usize;
 
