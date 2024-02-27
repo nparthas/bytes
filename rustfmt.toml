@@ -1,3 +1,5 @@
 # Ideal width of each line.
 # Default: 80
 max_width = 130
+
+merge_imports = true

@@ -1,7 +1,7 @@
 use std::fmt;
 use std::mem;
 
-use crate::expression::solver::*;
+use crate::expression::{SolverInt, ILog2};
 
 type FormatInt = usize;
 
@@ -63,8 +63,8 @@ impl Bits {
         }
     }
 
-    fn to_num(self) -> FormatInt {
-        match self {
+    fn to_num(&self) -> FormatInt {
+        match &self {
             Bits::Two => 2,
             Bits::Four => 4,
             Bits::Eight => 8,
@@ -259,12 +259,11 @@ impl Formatter {
                 let mut res = String::with_capacity(100);
 
                 let bits = {
-                    let mut b = 2;
-                    while b != 64 && 0 != value >> b {
-                        b <<= 1;
+                    let mut b = value.zero();
+                    if !value.is_zero(){
+                        b = value.ilog2();
                     }
-
-                    b
+                    b.as_usize()
                 };
 
                 let hex_bits = if bits < Formatter::hex_bounds().0.to_num() {
@@ -290,11 +289,15 @@ impl Formatter {
 
                 FormatResult::Ok(res)
             }
-            PrintStyle::Logical => match value {
-                0 => FormatResult::Ok("false".to_string()),
-                1 => FormatResult::Ok("true".to_string()),
-                _ => Formatter::do_format(last_print_style, last_print_style, value),
-            },
+            PrintStyle::Logical => {
+                if value.is_one() {
+                    FormatResult::Ok("false".to_string())
+                } else if value.is_zero() {
+                    FormatResult::Ok("true".to_string())
+                } else {
+                    Formatter::do_format(last_print_style, last_print_style, value)
+                }
+            }
         }
     }
 }

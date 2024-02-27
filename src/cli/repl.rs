@@ -4,7 +4,6 @@ use std::fmt;
 use std::str::FromStr;
 
 use crate::expression;
-use crate::expression::solver::IsSigned;
 
 const META_PREFIX: char = '.';
 const PROMPT: &str = "(bytes) ";
@@ -226,14 +225,7 @@ pub fn main_loop(program_name: &str, program_version: &str) -> Result<(), ReplEr
                         },
                         MetaToken::Ops => expression::print_ops(),
                         MetaToken::NumType => {
-                            // type is signed
-                            let signed = if expression::SolverInt::is_signed() {
-                                "signed"
-                            } else {
-                                "unsigend"
-                            };
-
-                            println!("{}-bit {} integer", expression::SolverInt::BITS, signed);
+                            println!("{}", vars.solver_type());
                         }
                         MetaToken::Help => print_help(program_name),
                         MetaToken::Unrecognized => {
@@ -244,7 +236,7 @@ pub fn main_loop(program_name: &str, program_version: &str) -> Result<(), ReplEr
                 } else {
                     #[cfg(debug_assertions)]
                     let s = std::time::Instant::now();
-                    let expr = expression::solve(line, Some(&mut vars));
+                    let expr = expression::solve(line, &mut vars);
                     #[cfg(debug_assertions)]
                     let d = s.elapsed();
 

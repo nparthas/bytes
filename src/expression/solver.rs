@@ -1,78 +1,12 @@
 use std::collections;
 use std::convert::TryFrom;
-use std::convert::TryInto;
 use std::fmt;
 use std::iter;
 use std::mem;
 use std::num::TryFromIntError;
 use std::str;
 
-// TODO:: .help  + print meta commands on incorrect command
-// TODO:: clear variables
-
-pub type SolverInt = usize;
-
-pub trait IsSigned {
-    fn is_signed() -> bool;
-}
-
-impl IsSigned for SolverInt {
-    // in case we change the type in the future actually do a check
-    #[allow(unused_comparisons, clippy::absurd_extreme_comparisons)]
-    fn is_signed() -> bool {
-        SolverInt::MIN < 0
-    }
-}
-
-// unary `-` not supported for unsigned types, use 2's complement identity
-// ~x = -(x+1)
-trait TwosC {
-    type Output;
-    fn twosc(self) -> Self::Output;
-    fn div(self, other: Self::Output) -> Self::Output;
-    fn log2(self) -> Self::Output;
-}
-
-impl TwosC for SolverInt {
-    type Output = Self;
-    fn twosc(self) -> Self::Output {
-        (!self).wrapping_add(1)
-    }
-
-    fn div(self, other: Self::Output) -> Self::Output {
-        // the way the expression parses num1 won't ever be negative
-        // but handle anyway for completeness
-        let mut num1 = self;
-        let mut num2 = other;
-
-        let sign1 = num1 >> (Self::BITS - 1);
-        let sign2 = num2 >> (Self::BITS - 1);
-
-        if 0 != sign1 {
-            num1 = num1.twosc();
-        }
-
-        if 0 != sign2 {
-            num2 = num2.twosc();
-        }
-
-        let mut res = num1 / num2;
-
-        if 0 != sign1 ^ sign2 {
-            res = res.twosc();
-        }
-
-        res
-    }
-
-    fn log2(self) -> Self::Output {
-        if 0 == self {
-            return 0;
-        }
-
-        Self::Output::try_from(Self::BITS).unwrap() - Self::Output::try_from(self.leading_zeros()).unwrap() - 1
-    }
-}
+use crate::expression::solverint::{SolverInt, SolverType};
 
 pub const FEED_OFFSET_END: usize = usize::MAX;
 const FEED_OFFSET_BEHIND: usize = 1;
@@ -171,6 +105,7 @@ impl fmt::Display for SolverError {
 
 #[derive(Debug)]
 pub struct Variables {
+    solver_type: SolverType,
     vars: collections::HashMap<Identifier, SolverInt>,
     res_ident: Identifier,
 }
@@ -190,6 +125,10 @@ impl Variables {
 
     pub fn result_identifier(&self) -> Identifier {
         self.res_ident.clone()
+    }
+
+    pub fn solver_type(&self) -> SolverType {
+        self.solver_type
     }
 
     pub fn clear(&mut self) {
@@ -219,6 +158,7 @@ impl Default for Variables {
         Variables {
             vars: collections::HashMap::new(),
             res_ident: Identifier("_".to_string()),
+            solver_type: Default::default(),
         }
     }
 }
@@ -533,17 +473,19 @@ struct TokenFeed<'a> {
     _src: String,
     _peek: Option<Result<Option<Token>, SolverError>>,
     itr: iter::Peekable<iter::Enumerate<str::Chars<'a>>>,
+    solver_int: SolverInt,
 }
 
 // our return type isn't what Iterator is so we don't implement
 // using transmute instead of manually holding the index since its simpler
 impl<'a> TokenFeed<'a> {
-    fn new(line: String) -> Self {
+    fn new(line: String, solver_type: SolverType) -> Self {
         let itr = unsfe!(mem::transmute(line.chars().enumerate().peekable()));
         TokenFeed {
             _src: line,
             _peek: None,
             itr,
+            solver_int,
         }
     }
 
@@ -621,7 +563,7 @@ impl<'a> TokenFeed<'a> {
                 ':' => {
                     return ok_some!(Token::Op(OpToken::TernaryColon));
                 }
-                '0'..='9' => return ok_some!(Token::Num(TokenFeed::extract_number(c.1, &mut self.itr)?)),
+                '0'..='9' => return ok_some!(Token::Num(TokenFeed::extract_number(&self.solver_type, c.1, &mut self.itr)?)),
                 w if w.is_alphabetic() || '_' == w => {
                     if let Ok(()) = TokenFeed::match_multichar_tok("log2", c.0, c.1, &mut self.itr) {
                         return ok_some!(Token::Op(OpToken::Function(Func::Log2)));
@@ -664,9 +606,16 @@ impl<'a> TokenFeed<'a> {
         None
     }
 
+    // TODO:: solver int vs solver type reconcile
+
+
     // first character must be valid
     // push any other invalid errors to be caught by other parts of the program
-    fn extract_number(c: char, itr: &mut iter::Peekable<iter::Enumerate<str::Chars>>) -> Result<SolverInt, SolverError> {
+    fn extract_number(
+        solver_type: &SolverType,
+        c: char,
+        itr: &mut iter::Peekable<iter::Enumerate<str::Chars>>,
+    ) -> Result<SolverInt, SolverError> {
         // probably the best way to do this since rust isn't ASCII
         let mut s = String::with_capacity(18);
         s.push(c);
@@ -685,7 +634,8 @@ impl<'a> TokenFeed<'a> {
                 }
                 '0'..='9' => s.push(itr.next().unwrap().1),
                 _ => {
-                    return Ok(SolverInt::from_str_radix(s.as_str(), radix).unwrap());
+                    let loc = if let Some(i) = itr.peek() { i.0 } else { FEED_OFFSET_END };
+                    return solver_type.from_str_radix(s.as_str(), radix, loc);
                 }
             }
         }
@@ -708,19 +658,8 @@ impl<'a> TokenFeed<'a> {
             return Err(SolverError::InvalidExpressionError(ErrorLocation { error, loc, hint: None }));
         }
 
-        match SolverInt::from_str_radix(s.as_str(), radix) {
-            Ok(res) => Ok(res),
-            Err(e) => {
-                assert!(e.kind() == &std::num::IntErrorKind::PosOverflow);
-                let loc = if let Some(i) = itr.peek() { i.0 } else { FEED_OFFSET_END };
-
-                Err(SolverError::ParseTooLargeNumError(ErrorLocation {
-                    error: "Provided integer too large",
-                    loc,
-                    hint: None,
-                }))
-            }
-        }
+        let loc = if let Some(i) = itr.peek() { i.0 } else { FEED_OFFSET_END };
+        solver_type.from_str_radix(s.as_str(), radix, loc)
     }
 
     fn extract_identifer(c: char, itr: &mut iter::Peekable<iter::Enumerate<str::Chars>>) -> Identifier {
@@ -819,13 +758,13 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
     let mut num1 = match &cur {
         Token::Num(num) => *num,
         Token::Op(op) => match op {
-            OpToken::Minus => do_expression(OpToken::PRECEDENCE_NEG_TOK, feed, vars)?.twosc(),
+            OpToken::Minus => do_expression(OpToken::PRECEDENCE_NEG_TOK, feed, vars)?,
             OpToken::BitNot => !do_expression(OpToken::BitNot.precedence(), feed, vars)?,
             OpToken::LogicalNot => {
-                if do_expression(OpToken::LogicalNot.precedence(), feed, vars)? != 0 {
-                    0
+                if do_expression(OpToken::LogicalNot.precedence(), feed, vars)? != vars.solver_type().zero() {
+                    vars.solver_type.zero()
                 } else {
-                    1
+                    vars.solver_type.one()
                 }
             }
             OpToken::Open | OpToken::Function(_) => {
@@ -878,8 +817,8 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
 
                 if let OpToken::Function(func) = op {
                     match func {
-                        Func::Log2 => res = TwosC::log2(res),
-                        Func::Popcnt => res = res.count_ones().try_into().unwrap(),
+                        Func::Log2 => res = res.log2(),
+                        Func::Popcnt => res = res.count_ones(),
                     }
                 }
 
@@ -948,14 +887,26 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
             OpToken::BitXor => num1 ^= num2,
             OpToken::BitShiftRight => num1 >>= num2,
             OpToken::BitShiftLeft => num1 <<= num2,
-            OpToken::LogicalAnd => num1 = if num1 != 0 && num2 != 0 { 1 } else { 0 },
-            OpToken::LogicalOr => num1 = if num1 != 0 || num2 != 0 { 1 } else { 0 },
-            OpToken::Greater => num1 = if num1 > num2 { 1 } else { 0 },
-            OpToken::GreaterEq => num1 = if num1 >= num2 { 1 } else { 0 },
-            OpToken::Lesser => num1 = if num1 < num2 { 1 } else { 0 },
-            OpToken::LesserEq => num1 = if num1 <= num2 { 1 } else { 0 },
-            OpToken::Equal => num1 = if num1 == num2 { 1 } else { 0 },
-            OpToken::NotEqual => num1 = if num1 != num2 { 1 } else { 0 },
+            OpToken::LogicalAnd => {
+                num1 = if !num1.is_zero() && !num2.is_zero() {
+                    num1.one()
+                } else {
+                    num1.zero()
+                }
+            }
+            OpToken::LogicalOr => {
+                num1 = if !num1.is_zero() || !num2.is_zero() {
+                    num1.one()
+                } else {
+                    num1.zero()
+                }
+            }
+            OpToken::Greater => num1 = if num1 > num2 { num1.one() } else { num1.zero() },
+            OpToken::GreaterEq => num1 = if num1 >= num2 { num1.one() } else { num1.zero() },
+            OpToken::Lesser => num1 = if num1 < num2 { num1.one() } else { num1.zero() },
+            OpToken::LesserEq => num1 = if num1 <= num2 { num1.one() } else { num1.zero() },
+            OpToken::Equal => num1 = if num1 == num2 { num1.one() } else { num1.zero() },
+            OpToken::NotEqual => num1 = if num1 != num2 { num1.one() } else { num1.zero() },
 
             _ => {
                 unreachable!("missed handling on op [`{}`]... save the equation and write a test", op);
@@ -979,21 +930,15 @@ fn do_expression(precedence: i32, feed: &mut TokenFeed, vars: &mut Variables) ->
     Ok(num1)
 }
 
-pub fn solve<S: Into<String>>(expr: S, vars: Option<&mut Variables>) -> Result<SolverInt, SolverError> {
-    let mut tokenfeed = TokenFeed::new(expr.into());
+pub fn solve<S: Into<String>>(expr: S, vars: &mut Variables) -> Result<SolverInt, SolverError> {
+    let mut tokenfeed = TokenFeed::new(expr.into(), vars.solver_type());
     let mut vars = vars;
 
-    let res = match vars {
-        Some(ref mut variables) => do_expression(OpToken::PRECEDENCE_NO_PREC, &mut tokenfeed, variables),
-        None => do_expression(OpToken::PRECEDENCE_NO_PREC, &mut tokenfeed, &mut Variables::new()),
-    };
+    let res = do_expression(OpToken::PRECEDENCE_NO_PREC, &mut tokenfeed, vars);
 
     if let Ok(num) = res {
         if let Ok(None) = tokenfeed.next() {
-            if let Some(v) = vars {
-                v.update(v.result_identifier(), num);
-            }
-
+            vars.update(vars.result_identifier(), num);
             Ok(num)
         } else {
             Err(SolverError::InvalidExpressionError(ErrorLocation::new(
@@ -1028,7 +973,11 @@ mod tests {
     fn call_eq<S: Into<String>>(expr: S, expected: SolverInt, vars: Option<&mut Variables>) -> Result<(), TestError> {
         let expr = expr.into();
         println!("running [{}]", expr);
-        let actual = solve(&expr, vars);
+        let actual = match vars {
+            Some(ref mut variables) => solve(&expr, variables),
+            None => solve(&expr, &mut Variables::new()),
+        };
+
         match actual {
             Ok(actual) => {
                 if actual == expected {
@@ -1047,7 +996,7 @@ mod tests {
 
     macro_rules! expect_error {
         ($equation:expr, $err:path) => {
-            let res = solve($equation, None);
+            let res = solve($equation, &mut Variables::new());
             if let Err($err(_)) = res {
             } else {
                 return Err(TestError {
@@ -1249,7 +1198,7 @@ mod tests {
             ("13#10", 137858491849),
             ("0xFFFFFFFFFFFFFFFF", 0xFFFFFFFFFFFFFFFF),
             ("0xFFFFFFFFFFFFFFFF + 1", 0),
-            ("(1-2)*5", 5.twosc()),
+            ("(1-2)*5", 5),
             ("0xFFFFFFFFFFFFFFFF + 2", 1),
             ("~0", !0),
         ];
